@@ -1,7 +1,4 @@
-build/
-bin/
-target/
-.gradle/
-*.class
-logs/
+/target
+/logs
+.env
 *.log

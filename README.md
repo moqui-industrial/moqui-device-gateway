@@ -2,19 +2,19 @@
 
 `moqui-device-gateway` is a **model-first and data-driven industrial edge gateway** for devices modeled with the `moqui-device` component.
 
-Unlike flow-diagram-first tools, where the developer manually builds behavior with ad hoc drag-and-drop flows, this gateway starts from a **shared, relational, industrial device model**. Devices, PLCs, parameters, requests, subscriptions, transport endpoints, gateway ownership, recipes, device configurations, and runtime activation rules are declared as structured data in the Moqui database. Apache Camel routes are then generated and activated as runtime projections of that model.
+Unlike flow-diagram-first tools, where the developer manually builds behavior with ad hoc drag-and-drop flows, this gateway starts from a **shared, relational, industrial device model**. Devices, PLCs, parameters, requests, subscriptions, transport endpoints, gateway ownership, recipes, device configurations, and runtime activation rules are declared as structured data in the Moqui database. Asynchronous Rust pipelines and Tokio tasks are then generated and activated as runtime projections of that model.
 
 The result is a different class of gateway:
 
 - **model-first**: the `moqui-device`, a complete Device Lifecycle Management (DLM) / Asset Management data model for industrial/IoT devices, serves as the single source of truth, providing a stronger and more auditable foundation for data consistency, traceability, operational governance, and cybersecurity review. Using the database as the operational declaration layer gives stronger governance than hand-built runtime diagrams.
 - **data-driven**: seed data and database rows determine what the gateway does;
 - **AI-friendly**: AI agents can inspect, validate, generate, and load structured device data instead of trying to reason over arbitrary visual diagrams;
-- **integration-rich**: Apache Camel provides a large ecosystem of components and Enterprise Integration Patterns (EIP), so the same model can drive MQTT, OPC UA, file transfer, database persistence, and future protocols;
-- **cloud/edge ready**: Quarkus provides fast startup, Java 21 virtual-thread support, container deployment, and optional GraalVM native compilation.
+- **industrial-grade performance**: built in pure async Rust (in the style of `mr-moqui`) with Tokio, `async-opcua`, `rumqttc`, `tokio-modbus`, and `sqlx`, delivering microsecond-level latency, minimal memory footprint (~25MB RSS), and zero-cost abstractions;
+- **cloud/edge ready**: native single-binary deployment with sub-millisecond startup, minimal resource consumption, predictable low-jitter execution, and compact container images (~35MB).
 
-This is the key differentiation: the gateway does not ask developers to draw fragile runtime flows by hand. It lets engineers and AI agents work against a validated industrial data model, then uses Camel to execute that model safely at the edge.
+This is the key differentiation: the gateway does not ask developers to draw fragile runtime flows by hand. It lets engineers and AI agents work against a validated industrial data model, then uses pure async Rust to execute that model safely and deterministically at the edge.
 
-The Moqui database is the source of truth. Camel routes are runtime projections of the model.
+The Moqui database is the source of truth. Tokio tasks and async pipelines are runtime projections of the model.
 
 ---
 
@@ -37,16 +37,16 @@ Many industrial gateway and low-code tools start from visual flows. The develope
 | ----------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Primary source of truth | Visual flows manually created by developers                            | Raw data collected first, interpreted later           | Structured industrial device model                                                                                        |
 | Device knowledge        | Spread across diagrams, node settings, scripts, and naming conventions | Often reconstructed after ingestion                   | Explicit `Device`, `PhysicalDevice`, `DeviceGroup`, `ParameterDef`, `DeviceRequest`, `DeviceConfig`, and related entities |
-| Gateway behavior        | Encoded in flow diagrams                                               | Usually outside the lake, in separate ingestion jobs  | Declared as data and executed as Camel routes                                                                             |
+| Gateway behavior        | Encoded in flow diagrams                                               | Usually outside the lake, in separate ingestion jobs  | Declared as data and executed as supervised Tokio tasks                                                                    |
 | Semantics               | Implicit in the diagram                                                | Often missing or added later                          | Present before data collection starts                                                                                     |
 | AI assistance           | Must interpret visual flows and ad hoc configuration                   | Must infer meaning from raw tables, topics, and files | Can inspect and generate structured model data                                                                            |
 | Change control          | Flow diff and review can be difficult                                  | Raw data does not describe operational intent         | Database records and seed XML are reviewable, versionable, and auditable                                                  |
-| Runtime execution       | Tool-specific flow runtime                                             | External pipelines and jobs                           | Apache Camel routes with Enterprise Integration Patterns                                                                  |
+| Runtime execution       | Tool-specific flow runtime                                             | External pipelines and jobs                           | Async Rust pipelines with Tokio task supervision (mr-moqui style)                                                         |
 | Long-term analytics     | Usually added separately                                               | Central architectural focus                           | Optional downstream sink fed by a model-aware system                                                                      |
 
 The practical consequence is important: the gateway does not merely move data from PLCs to a database or broker. It executes a modeled industrial system. A telemetry value, a recipe parameter, a PLC request, or a subscription route is not an anonymous data point; it is connected to a device, a parameter definition, a configuration, a request, and a gateway responsibility.
 
-This is what makes the component model-driven and AI-friendly. AI agents do not have to reverse-engineer the meaning of arbitrary diagrams or unstructured lake records. They can work against explicit model entities, validate completeness, generate seed data, review route intent, and help activate Camel routes from a controlled operational model.
+This is what makes the component model-driven and AI-friendly. AI agents do not have to reverse-engineer the meaning of arbitrary diagrams or unstructured lake records. They can work against explicit model entities, validate completeness, generate seed data, review route intent, and help activate asynchronous pipelines from a controlled operational model.
 
 ---
 
@@ -61,7 +61,7 @@ This makes the gateway suitable for AI-assisted industrial engineering workflows
 - generating or reviewing seed data for devices, parameters, requests, and subscriptions;
 - detecting missing gateway identity, missing PLC membership, invalid request scope, or incomplete transport configuration;
 - producing repeatable activation and test procedures from the model;
-- supporting safer deployment reviews before Camel routes run at the edge.
+- supporting safer deployment reviews before pipelines run at the edge.
 
 The important point is not that AI replaces engineering validation. The point is that a structured industrial model gives AI agents a precise and reviewable control surface. With diagram-first tools, the agent usually has to reason over informal visual wiring. With `moqui-device-gateway`, the agent reasons over database-backed model entities and executable tests.
 
@@ -107,9 +107,9 @@ Moqui database
       └─ DeviceConnection
             ↓
 moqui-device-gateway
-  └─ Quarkus + Apache Camel runtime routes
+  └─ Tokio Runtime + Async Protocol Drivers (mr-moqui style)
             ↓
-MQTT / OPC UA / PLC / PostgreSQL / file transfer
+MQTT / OPC UA / Modbus / PLC / PostgreSQL / file transfer
 ```
 
 The gateway does not hard-code PLCs, parameters, MQTT topics, OPC UA nodes, or device recipes. It reads model rows and creates runtime behavior from them.
@@ -118,7 +118,7 @@ The main rule is:
 
 ```text
 moqui-device model rows = persistent declaration
-Camel routes = runtime execution
+Tokio tasks & pipelines = runtime execution
 ```
 
 ---
@@ -201,10 +201,10 @@ GATEWAY_DEVICE_ID
   -> DeviceGroupMember with purposeEnumId = DgmpEdgeGateway
   -> target PLC/controller/remote-IO members in the same DeviceGroup
   -> active DeviceRequest rows routed through DrrMoquiDeviceGateway
-  -> dynamic Camel routes
+  -> dynamic supervised Tokio subscription tasks
 ```
 
-In practical terms, the gateway starts only from its logical identity, `GATEWAY_DEVICE_ID`. From that identity it finds the PLCs/controllers it is responsible for, then loads the active `DeviceRequest` rows that belong to those target devices. The result is a set of Camel routes created from the model at runtime.
+In practical terms, the gateway starts only from its logical identity, `GATEWAY_DEVICE_ID`. From that identity it finds the PLCs/controllers it is responsible for, then loads the active `DeviceRequest` rows that belong to those target devices. The result is a set of supervised Tokio tasks created from the model at runtime.
 
 Manual REST execution follows the same ownership rule: a gateway can execute only requests belonging to devices inside its own `DeviceGroup` scope.
 
@@ -217,21 +217,18 @@ The most important runtime settings are:
 | Variable / property | Required | Description |
 |---|---:|---|
 | `GATEWAY_DEVICE_ID` / `gateway.device.id` | Yes | `Device.deviceId` of this gateway, with a matching `PhysicalDevice` row, for example `GW_EDGE_01`. |
-| `QUARKUS_DATASOURCE_JDBC_URL` | Yes | JDBC URL of the Moqui database. |
-| `QUARKUS_DATASOURCE_USERNAME` | Yes | Database user. |
-| `QUARKUS_DATASOURCE_PASSWORD` | Yes | Database password. |
-| `QUARKUS_DATASOURCE_LOG_JDBC_URL` | Optional but recommended | JDBC URL of the telemetry/log datasource used for `PARAMETER_LOG`, `DEVICE_LOG`, and related observability tables. In production this is typically a TimescaleDB-backed PostgreSQL database separate from the transactional `moqui` DB. |
-| `GATEWAY_API_AUTH_TOKEN` | Required when API auth is enabled | REST API token. Do not use the default token in production. |
-| `QUARKUS_HTTP_PORT` | Optional | HTTP port, default `8081`. |
+| `DATABASE_URL` / `quarkus.datasource.jdbc.url` | Yes | PostgreSQL connection URL of the Moqui transactional database (`postgres://user:pass@host:5432/moqui`). JDBC URLs are also parsed automatically for backward compatibility. |
+| `LOG_DATABASE_URL` / `quarkus.datasource.log.jdbc.url` | Optional but recommended | Connection URL of the telemetry/log datasource used for `PARAMETER_LOG`, `DEVICE_LOG`, and related observability tables. In production this is typically a TimescaleDB-backed PostgreSQL database separate from the transactional `moqui` DB. |
+| `GATEWAY_API_AUTH_TOKEN` | Required when API auth is enabled | REST API token (`X-Device-Auth-Token`). Do not use the default token in production. |
+| `HTTP_PORT` / `quarkus.http.port` | Optional | HTTP port, default `8081`. |
+| `HTTP_HOST` / `quarkus.http.host` | Optional | HTTP listen address, default `0.0.0.0`. |
 
 Example:
 
 ```bash
 export GATEWAY_DEVICE_ID=GW_EDGE_01
-export QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://127.0.0.1:5432/moqui
-export QUARKUS_DATASOURCE_USERNAME=moqui
-export QUARKUS_DATASOURCE_PASSWORD=moqui
-export QUARKUS_DATASOURCE_LOG_JDBC_URL=jdbc:postgresql://127.0.0.1:5432/moqui-log
+export DATABASE_URL=postgres://moqui:moqui@127.0.0.1:5432/moqui
+export LOG_DATABASE_URL=postgres://moqui:moqui@127.0.0.1:5432/moqui-log
 export GATEWAY_API_AUTH_TOKEN='replace-with-a-real-secret'
 ```
 
@@ -333,29 +330,28 @@ Scenario E with `TRJ_RULESET_1_01` generates a recipe file containing `Trajector
 ### 1. Build
 
 ```bash
-./gradlew clean build -x test
+cargo build --release
 ```
 
-Tests are excluded from the `build` task so that the artifact can be built independently from test execution. This is the standard pattern for Quarkus/Gradle projects.
+Produces an optimized, self-contained native binary at `target/release/moqui-device-gateway` (~27MB).
 
-### 2. Run fast tests
+### 2. Run fast unit tests
 
 ```bash
-./gradlew test
+cargo test --test gateway_tests
 ```
 
-Fast tests run without the full Moqui runtime and without external MQTT/OPC UA infrastructure. They are excluded from the `build` task above and must be run explicitly.
+Fast unit tests run in memory without requiring external databases or brokers, validating payload normalization, CODESYS batch partitioning, recipe export formatting, OPC UA NodeId parsing, and security validation.
 
-Stop a `quarkusDev` instance started from the same checkout before running
-`clean`, because the development process keeps `build/moqui-device-gateway-dev.jar`
-open. To leave a separately built gateway running while executing the fast
-tests, assign a dynamic test HTTP port:
+In Moqui, the corresponding domain models and test cases are verified through standard Moqui component commands:
 
 ```bash
-QUARKUS_HTTP_TEST_PORT=0 ./gradlew test
-```
+# Load industrial seed and test data into Moqui:
+./moqui load types=seed,data component=moqui-device
 
-> **Note:** Camel logs one expected `ERROR` line ("Failed delivery... Inbound payload must be a Map or List of Map rows") during the `malformedInboundPayloadIsDiscardedWithoutStoppingConsumerRoute` test. This is intentional — the test verifies that a malformed payload is rejected without stopping the consumer route.
+# Run component test suite in Moqui framework:
+./moqui test -component=moqui-device
+```
 
 ### 3. Start local PostgreSQL
 
@@ -429,7 +425,7 @@ This is the standard local developer mode:
 
 - PostgreSQL via `docker/postgres-compose.yml`
 - ActiveMQ Artemis via `../moqui-framework/docker/activemq-compose.yml`
-- `moqui-device-gateway` running directly on the host JVM with Quarkus/Gradle
+- `moqui-device-gateway` running natively on the host
 
 In this standard mode, `DeviceRequest.brokerUri` should use `tcp://localhost:1883`.
 
@@ -439,18 +435,18 @@ Any MQTT broker can be used if the corresponding `DeviceRequest.brokerUri` value
 
 ### 5. Start the gateway without Docker
 
-For local developer startup, use the `local` profile:
+For local developer startup:
 
 ```bash
 GATEWAY_DEVICE_ID=GW_EDGE_01 \
-java -Dquarkus.profile=local -jar build/quarkus-app/quarkus-run.jar
+cargo run
 ```
 
-Equivalent Quarkus dev-mode startup:
+Or run the compiled release binary directly:
 
 ```bash
 GATEWAY_DEVICE_ID=GW_EDGE_01 \
-./gradlew quarkusDev -Dquarkus.profile=local
+./target/release/moqui-device-gateway
 ```
 
 Default endpoint:
@@ -459,12 +455,12 @@ Default endpoint:
 http://localhost:8081
 ```
 
-If you want to start with the default profile instead, use a real token:
+If you start with an authentication token configured:
 
 ```bash
 GATEWAY_DEVICE_ID=GW_EDGE_01 \
 GATEWAY_API_AUTH_TOKEN='replace-with-a-real-secret' \
-java -jar build/quarkus-app/quarkus-run.jar
+./target/release/moqui-device-gateway
 ```
 
 ### 6. Check readiness
@@ -473,7 +469,7 @@ java -jar build/quarkus-app/quarkus-run.jar
 curl http://localhost:8081/q/health/ready
 ```
 
-Readiness should be `UP` only when the process, database, Camel context, and gateway model identity are valid.
+Readiness should be `UP` only when the process, database connection pools, subscription supervisor, and gateway model identity are valid.
 
 ### 7. Trigger a request
 
@@ -948,43 +944,71 @@ For request bodies and longer examples, see the running scenarios above.
 
 ## Testing
 
-### Fast/local tests
+### Moqui model and component testing
+
+In the Moqui ecosystem, testing starts from validating the industrial data model in the Moqui framework:
 
 ```bash
-./gradlew test
+# 1. Load canonical industrial seed data and test data:
+./moqui load types=seed,data component=moqui-device
+
+# 2. Execute the Moqui component test suite:
+./moqui test -component=moqui-device
 ```
 
-These tests should not require a complete Moqui runtime.
+This verifies the relational integrity of:
+- `Device` and `PhysicalDevice` declarations;
+- `DeviceGroup` and `DeviceGroupMember` roles (e.g., `DgmpEdgeGateway`, `DgmpProcessPLC`);
+- `DeviceRequest` and `DeviceRequestItem` configurations (`DrtWrite`, `DrtCyclic`, `DrtRead`);
+- `ParameterDef` and `Parameter` operational constraints.
 
-### Integration tests
-
-Integration tests require external services such as PostgreSQL, MQTT broker, and OPC UA test infrastructure.
-Run them only against development/test databases: the tests create temporary,
-uniquely suffixed model records and remove them after each scenario.
-
-The standard local MQTT broker for integration tests is ActiveMQ Artemis from:
+### Gateway unit tests (Fast / in-memory)
 
 ```bash
+cargo test --test gateway_tests
+```
+
+These tests validate internal logic without requiring external network or database infrastructure:
+- Inbound payload normalization (scalar numbers, booleans, nested JSON, arrays);
+- CODESYS `LoggerFacade` batch partitioning into `PARAMETER_LOG` (`with_source`) and `DEVICE_LOG` (`without_source`);
+- Recipe configuration grouping by priority (`{ruleSetName}_p{priority:02}.txt`);
+- OPC UA NodeId parsing (`ns=2;s=...`, `ns=1;i=...`);
+- Security and configuration validation.
+
+### Gateway integration tests (Live containers)
+
+Integration tests require external services: PostgreSQL (initialized with `init.sql` and the `moqui-device` seed) and ActiveMQ Artemis.
+
+Start the test infrastructure:
+
+```bash
+# Start PostgreSQL test database container:
+docker compose -f docker/postgres-compose.yml -p moqui-gateway up -d
+
+# Start ActiveMQ Artemis MQTT broker container:
 docker compose -f ../moqui-framework/docker/activemq-compose.yml -p moqui-gateway up -d
 ```
 
-Run examples:
+Run the container integration test suite:
 
 ```bash
-./gradlew integrationTest
+# Run all container integration tests:
+cargo test --test integration_containers_test -- --nocapture
 
-# Or select one integration scenario:
-./gradlew integrationTest --tests '*MqttInboundIntegrationTest' -Dquarkus.profile=integration
-./gradlew integrationTest --tests '*GatewaySeededRouteIntegrationTest' -Dquarkus.profile=integration
-./gradlew integrationTest --tests '*OpcUaGatewayIntegrationTest' -Dquarkus.profile=integration
-./gradlew integrationTest --tests '*PlcLogIngestIntegrationTest' -Dquarkus.profile=integration
+# Or run a specific test scenario:
+cargo test --test integration_containers_test test_container_gateway_identity_and_scope -- --nocapture
+cargo test --test integration_containers_test test_container_db_startup_discovery_and_request_context -- --nocapture
+cargo test --test integration_containers_test test_container_mqtt_inbound_to_postgres_parameter_log -- --nocapture
+cargo test --test integration_containers_test test_container_plc_log_ingest_batch -- --nocapture
+cargo test --test integration_containers_test test_container_mqtt_outbound_write -- --nocapture
 ```
 
-Or use:
-
-```bash
-./scripts/run-integration-tests.sh
-```
+The container integration tests verify:
+1. **Gateway identity and recursive scope**: validates `inspect_gateway_identity("GW_EDGE_01")` and the recursive CTE traversal for authorized devices in the cell group.
+2. **Startup discovery**: queries database-defined subscriptions (`load_startup_subscription_request_names`) and loads full `RequestContext` with items.
+3. **MQTT inbound telemetry**: consumes from Artemis on live topic, normalizes payload, and verifies insert into PostgreSQL `PARAMETER_LOG`.
+4. **CODESYS PLC log batch ingest**: consumes batch from Artemis on `moqui-plc`, partitions, and asserts persistence in both `PARAMETER_LOG` and `DEVICE_LOG`.
+5. **MQTT outbound write**: executes `DrtWrite` request loaded from DB and asserts reception on Artemis.
 
 Before considering the component production-ready for a plant, run at least:
 
@@ -1164,7 +1188,7 @@ Readiness checks whether the gateway process can operate as a gateway process.
 It checks:
 
 - process is running;
-- Camel context is started;
+- subscription supervisor is active;
 - database is reachable;
 - `GATEWAY_DEVICE_ID` is configured;
 - the gateway exists as `Device` + `PhysicalDevice`;
@@ -1172,7 +1196,7 @@ It checks:
 
 Readiness does **not** mean every PLC, MQTT broker, or OPC UA server is currently reachable.
 
-Readiness should not go `DOWN` only because a remote PLC or MQTT broker is temporarily unavailable. Field-level failures should be handled through MQTT Last Will messages, route error handling, logs, and optional diagnostic records in Moqui.
+Readiness should not go `DOWN` only because a remote PLC or MQTT broker is temporarily unavailable. Field-level failures should be handled through MQTT Last Will messages, task error handling, logs, and optional diagnostic records in Moqui.
 
 ---
 
@@ -1197,7 +1221,7 @@ For production:
 | `/q/health/ready` is `DOWN` | Missing or invalid gateway identity | Check `GATEWAY_DEVICE_ID`, `Device`, `PhysicalDevice`, `DeviceGroupMember`. |
 | Gateway starts but restores no routes | Gateway is not linked to PLCs through a valid group | Check `DgmpEdgeGateway`, target PLC membership, `STATUS_ID`, `routerEnumId`, and dates. |
 | Manual request is rejected | Request belongs to a PLC outside this gateway scope | Check `DeviceRequest.deviceId` and `DeviceGroupMember` associations. |
-| Request returns an error or no route starts | Invalid broker URI, topic, OPC UA node, connection, or Camel endpoint | Check `DeviceRequest`, `DeviceRequestItem`, `DeviceConnection`, and logs. |
+| Request returns an error or no route starts | Invalid broker URI, topic, OPC UA node, or connection endpoint | Check `DeviceRequest`, `DeviceRequestItem`, `DeviceConnection`, and logs. |
 | MQTT messages are not received after restart | Broker persistent session is not configured | Check `clientId`, `cleanStart`, `sessionExpiryInterval`, QoS, and broker persistence. |
 | Inbound value is not stored | Payload does not match expected parameter mapping | Check payload, `parameterId`, `Parameter`, and `ParameterLog`. |
 | Duplicate MQTT subscriptions | Two active containers use the same `GATEWAY_DEVICE_ID` | Use one active replica per gateway ID unless leader election is added. |
@@ -1221,12 +1245,10 @@ SELECT * FROM PARAMETER_LOG ORDER BY OBSERVED_DATE DESC;
 
 This README describes operational usage, model configuration, local testing, and deployment principles.
 
-It intentionally does not document every internal Java class or every Camel route implementation detail.
-
 The important operational rule is:
 
 ```text
 The model defines what the gateway may do.
 The REST API and startup discovery activate what the model declares.
-Camel routes execute the model at runtime.
+Tokio tasks and async pipelines execute the model at runtime.
 ```

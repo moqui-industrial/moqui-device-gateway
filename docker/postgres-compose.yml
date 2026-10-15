@@ -27,9 +27,9 @@ services:
       # and use version-specific PGDATA paths such as /var/lib/postgresql/18/docker.
       # Keep this mount when using PostgreSQL 18+.
       - moqui-gateway-postgres-data:/var/lib/postgresql
-      - ../src/test/resources/db/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
-      - ../src/test/resources/device-gateway-seed.sql:/docker-entrypoint-initdb.d/10-device-gateway-seed.sql.template:ro
-      - ../src/test/resources/device-gateway-opcua-seed.sql:/docker-entrypoint-initdb.d/20-device-gateway-opcua-seed.sql.template:ro
+      - ../tests/resources/db/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+      - ../tests/resources/device-gateway-seed.sql:/docker-entrypoint-initdb.d/10-device-gateway-seed.sql.template:ro
+      - ../tests/resources/device-gateway-opcua-seed.sql:/docker-entrypoint-initdb.d/20-device-gateway-opcua-seed.sql.template:ro
       - ./initdb/30-load-gateway-fixtures.sh:/docker-entrypoint-initdb.d/30-load-gateway-fixtures.sh:ro
     environment:
       POSTGRES_DB: moqui

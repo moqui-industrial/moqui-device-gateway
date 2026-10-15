@@ -18,22 +18,18 @@ services:
     container_name: moqui-device-gateway
     build:
       context: ..
-      dockerfile: ${DEVICE_GATEWAY_DOCKERFILE:-src/main/docker/Dockerfile.jvm}
+      dockerfile: ${DEVICE_GATEWAY_DOCKERFILE:-Dockerfile}
     image: ${DEVICE_GATEWAY_IMAGE:-moqui-device-gateway:local}
     restart: unless-stopped
     ports:
       - 127.0.0.1:8081:8081
     environment:
-      - QUARKUS_HTTP_HOST=0.0.0.0
-      - QUARKUS_PROFILE=integration
+      - HTTP_HOST=0.0.0.0
+      - HTTP_PORT=8081
       - GATEWAY_DEVICE_ID=${GATEWAY_DEVICE_ID:-GW_EDGE_01}
-      - QUARKUS_DATASOURCE_DB_KIND=postgresql
-      - QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://moqui-database:5432/moqui
-      - QUARKUS_DATASOURCE_USERNAME=moqui
-      - QUARKUS_DATASOURCE_PASSWORD=moqui
-      # Development only. Ignored when %integration.gateway.api.auth.enabled=false.
+      - DATABASE_URL=postgres://moqui:moqui@moqui-database:5432/moqui
+      - LOG_DATABASE_URL=postgres://moqui:moqui@moqui-database:5432/moqui
       - GATEWAY_API_AUTH_TOKEN=${GATEWAY_API_AUTH_TOKEN:-change-me}
-      # Default local test transport can be overridden to a real broker URI.
       - MQTT_READ_CONSUME_URI=seda:mqtt-read-device-request-in
     extra_hosts:
       - host.docker.internal:host-gateway
