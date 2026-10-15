@@ -150,11 +150,10 @@ async fn test_container_mqtt_inbound_to_postgres_parameter_log() {
     }
 
     // Give subscriber a brief moment to connect
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Connect publisher to Artemis with unique client ID
-    let pub_id = format!("test-pub-inbound-{}", uuid::Uuid::new_v4());
-    let mut pub_opts = MqttOptions::new(pub_id, "127.0.0.1", 1883);
+    // Connect publisher to Artemis
+    let mut pub_opts = MqttOptions::new("test-publisher-client", "127.0.0.1", 1883);
     pub_opts.set_credentials("artemis", "artemis");
     let (pub_client, mut pub_eventloop) = AsyncClient::new(pub_opts, 10);
 
@@ -264,10 +263,9 @@ async fn test_container_plc_log_ingest_batch() {
         return;
     }
 
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let pub_id = format!("test-pub-plc-{}", uuid::Uuid::new_v4());
-    let mut pub_opts = MqttOptions::new(pub_id, "127.0.0.1", 1883);
+    let mut pub_opts = MqttOptions::new("test-plc-publisher", "127.0.0.1", 1883);
     pub_opts.set_credentials("artemis", "artemis");
     let (pub_client, mut pub_eventloop) = AsyncClient::new(pub_opts, 10);
 

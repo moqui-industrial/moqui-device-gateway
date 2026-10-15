@@ -6,12 +6,14 @@ set -euo pipefail
 # - ActiveMQ Artemis running with MQTT enabled.
 #
 # Standard Moqui Docker setup:
-#   docker compose -f docker/postgres-compose.yml -p moqui-gateway up -d
 #   docker compose -f ../moqui-framework/docker/activemq-compose.yml -p moqui-gateway up -d
 #
-# The test expects the MQTT broker on:
+# The test JVM expects the MQTT broker on:
 #   tcp://localhost:1883
 # with credentials:
 #   artemis / artemis
 
-cargo test --test integration_containers_test -- --nocapture
+./gradlew integrationTest --tests '*MqttInboundIntegrationTest' -Dquarkus.profile=integration
+./gradlew integrationTest --tests '*GatewaySeededRouteIntegrationTest' -Dquarkus.profile=integration
+./gradlew integrationTest --tests '*OpcUaGatewayIntegrationTest' -Dquarkus.profile=integration
+./gradlew integrationTest --tests '*PlcLogIngestIntegrationTest' -Dquarkus.profile=integration
