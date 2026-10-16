@@ -1,5 +1,5 @@
 # Multi-stage Docker build for moqui-device-gateway (Rust)
-FROM rust:1.85-bookworm AS builder
+FROM rust:1-bookworm AS builder
 
 WORKDIR /usr/src/moqui-device-gateway
 COPY Cargo.toml Cargo.lock ./
