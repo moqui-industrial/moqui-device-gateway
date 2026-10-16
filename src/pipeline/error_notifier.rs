@@ -90,8 +90,8 @@ impl InboundErrorNotifier {
             errors.remove(route_id)
         };
 
-        if let Some(state) = prev {
-            if state.notified.load(Ordering::SeqCst) {
+        if let Some(state) = prev
+            && state.notified.load(Ordering::SeqCst) {
                 let now = jiff::Timestamp::now();
                 let duration = (now.as_millisecond() - state.first_error_time.as_millisecond()) / 1000;
                 self.send_notification(
@@ -104,9 +104,9 @@ impl InboundErrorNotifier {
                     duration,
                 );
             }
-        }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn send_notification(
         &self,
         event_type: &'static str,

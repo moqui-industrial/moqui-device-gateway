@@ -219,9 +219,9 @@ impl OpcUaService {
             publish_uri_list.push(format!("{}/{}", endpoint_url, query));
         }
 
-        if config.opcua_write_after_publish_enabled {
-            if let Some(uri) = &config.opcua_write_after_publish_uri {
-                if uri.starts_with("http://") || uri.starts_with("https://") {
+        if config.opcua_write_after_publish_enabled
+            && let Some(uri) = &config.opcua_write_after_publish_uri
+                && (uri.starts_with("http://") || uri.starts_with("https://")) {
                     let client = reqwest::Client::new();
                     let payload = json!({
                         "eventType": "writeCompleted",
@@ -237,8 +237,6 @@ impl OpcUaService {
                         let _ = client.post(&u).json(&payload).send().await;
                     });
                 }
-            }
-        }
 
         Ok(json!({
             "status": "completed",
@@ -374,13 +372,12 @@ async fn write_with_retry(
 
     while tokio::time::Instant::now() < deadline {
         attempts += 1;
-        match session.write(&[write_val.clone()]).await {
+        match session.write(std::slice::from_ref(&write_val)).await {
             Ok(status_codes) => {
-                if let Some(sc) = status_codes.first() {
-                    if sc.is_good() {
+                if let Some(sc) = status_codes.first()
+                    && sc.is_good() {
                         return Ok(());
                     }
-                }
             }
             Err(e) => {
                 debug!("OPC UA write attempt {} failed: {:?}", attempts, e);

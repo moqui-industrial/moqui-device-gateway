@@ -47,9 +47,9 @@ impl SubscriptionManager {
     /// Restores database-defined subscriptions at gateway startup
     pub async fn on_start(&self) {
         // 1. Start static MQTT read consumer if configured
-        if self.config.mqtt_read_route_auto_startup {
-            if let Some(uri) = &self.config.mqtt_read_consume_uri {
-                if uri.starts_with("paho-mqtt5:") || uri.starts_with("tcp://") || uri.starts_with("mqtt://") {
+        if self.config.mqtt_read_route_auto_startup
+            && let Some(uri) = &self.config.mqtt_read_consume_uri
+                && (uri.starts_with("paho-mqtt5:") || uri.starts_with("tcp://") || uri.starts_with("mqtt://")) {
                     let route_id = "mqtt-read-device-request-consumer".to_string();
                     let cancel_token = CancellationToken::new();
                     let topic = parse_static_topic(uri).unwrap_or_else(|| "iot/parameters/in".to_string());
@@ -88,13 +88,11 @@ impl SubscriptionManager {
                         info!("Started static MQTT consumer on {}", uri);
                     }
                 }
-            }
-        }
 
         // 2. Start static PLC log consumer if configured
-        if self.config.plc_log_route_auto_startup {
-            if let Some(uri) = &self.config.plc_log_consume_uri {
-                if uri.starts_with("paho-mqtt5:") || uri.starts_with("tcp://") || uri.starts_with("mqtt://") {
+        if self.config.plc_log_route_auto_startup
+            && let Some(uri) = &self.config.plc_log_consume_uri
+                && (uri.starts_with("paho-mqtt5:") || uri.starts_with("tcp://") || uri.starts_with("mqtt://")) {
                     let route_id = "plc-log-consumer".to_string();
                     let cancel_token = CancellationToken::new();
                     let topic = parse_static_topic(uri).unwrap_or_else(|| "moqui-plc".to_string());
@@ -133,8 +131,6 @@ impl SubscriptionManager {
                         info!("Started static PLC log consumer on {}", uri);
                     }
                 }
-            }
-        }
 
         if !self.config.startup_discovery_enabled {
             info!("Gateway startup DB discovery is disabled for this profile.");
@@ -418,17 +414,15 @@ impl SubscriptionManager {
 
 fn resolve_topics(context: &RequestContext) -> Vec<String> {
     let mut topics = Vec::new();
-    if let Some(req_q) = &context.request_query {
-        if !req_q.trim().is_empty() && !context.items.is_empty() {
+    if let Some(req_q) = &context.request_query
+        && !req_q.trim().is_empty() && !context.items.is_empty() {
             topics.push(req_q.clone());
         }
-    }
     for item in &context.items {
-        if let Some(tq) = &item.target_query {
-            if !tq.trim().is_empty() && !topics.contains(tq) {
+        if let Some(tq) = &item.target_query
+            && !tq.trim().is_empty() && !topics.contains(tq) {
                 topics.push(tq.clone());
             }
-        }
     }
     topics
 }

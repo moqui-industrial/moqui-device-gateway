@@ -1,7 +1,8 @@
 [package]
 name = "moqui-device-gateway"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.99"
 authors = ["Moqui Ecosystem <info@moqui.org>"]
 license = "CC0-1.0"
 description = "Model-driven industrial edge gateway for Moqui in Rust, style mr-moqui"

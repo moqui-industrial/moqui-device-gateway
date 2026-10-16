@@ -61,8 +61,8 @@ impl MqttService {
         drop(client);
         let _ = tokio::time::timeout(Duration::from_millis(500), event_handle).await;
 
-        if config.mqtt_write_after_publish_enabled {
-            if let Some(uri) = &config.mqtt_write_after_publish_uri {
+        if config.mqtt_write_after_publish_enabled
+            && let Some(uri) = &config.mqtt_write_after_publish_uri {
                 send_callback(
                     uri,
                     "writeCompleted",
@@ -76,7 +76,6 @@ impl MqttService {
                 )
                 .await;
             }
-        }
 
         Ok(json!({
             "status": "completed",
@@ -159,8 +158,8 @@ impl MqttService {
                                 match save_result {
                                     Ok(_) => {
                                         notifier.clear_error(&route_clone).await;
-                                        if config.mqtt_read_after_store_enabled {
-                                            if let Some(uri) = &config.mqtt_read_after_store_uri {
+                                        if config.mqtt_read_after_store_enabled
+                                            && let Some(uri) = &config.mqtt_read_after_store_uri {
                                                 send_callback(
                                                     uri,
                                                     "readStored",
@@ -170,10 +169,9 @@ impl MqttService {
                                                     "MQTT",
                                                     &route_clone,
                                                     rows.len(),
-                                                    &[publish.topic.clone()],
+                                                    std::slice::from_ref(&publish.topic),
                                                 ).await;
                                             }
-                                        }
                                     }
                                     Err(e) => {
                                         warn!("DB persistence failed for MQTT route {}: {}", route_clone, e);
@@ -254,20 +252,18 @@ impl MqttService {
                                 match Normalizer::partition_plc_log_batch(payload_str) {
                                     Ok(batch) => {
                                         let mut failed = false;
-                                        if !batch.with_source.is_empty() {
-                                            if let Err(e) = db.insert_parameter_log_batch(&batch.with_source).await {
+                                        if !batch.with_source.is_empty()
+                                            && let Err(e) = db.insert_parameter_log_batch(&batch.with_source).await {
                                                 warn!("Failed to store PLC log parameter batch: {}", e);
                                                 notifier.record_error(&route_clone, Some(&context_clone.request_name), "MQTT-PLC-LOG", &e.to_string()).await;
                                                 failed = true;
                                             }
-                                        }
-                                        if !batch.without_source.is_empty() {
-                                            if let Err(e) = db.insert_device_log_batch(&batch.without_source).await {
+                                        if !batch.without_source.is_empty()
+                                            && let Err(e) = db.insert_device_log_batch(&batch.without_source).await {
                                                 warn!("Failed to store PLC log device batch: {}", e);
                                                 notifier.record_error(&route_clone, Some(&context_clone.request_name), "MQTT-PLC-LOG", &e.to_string()).await;
                                                 failed = true;
                                             }
-                                        }
                                         if !failed {
                                             notifier.clear_error(&route_clone).await;
                                         }
@@ -333,8 +329,7 @@ fn parse_mqtt_uri(uri: &str, default_client_id: &str) -> Result<(MqttOptions, Op
     // Expected formats:
     // tcp://host:port
     // paho-mqtt5:topic?brokerUrl=tcp://host:port&clientId=...
-    let (broker_part, topic_part, query_part) = if uri.starts_with("paho-mqtt5:") {
-        let after = &uri["paho-mqtt5:".len()..];
+    let (broker_part, topic_part, query_part) = if let Some(after) = uri.strip_prefix("paho-mqtt5:") {
         if let Some((top, q)) = after.split_once('?') {
             ("", Some(top.to_string()), q)
         } else {
@@ -391,6 +386,7 @@ fn safe_part(s: &str) -> String {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_callback(
     callback_uri: &str,
     event_type: &str,

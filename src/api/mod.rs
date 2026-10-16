@@ -250,11 +250,10 @@ async fn export_device_config(
         if let Err(e) = FileTransferService::transfer_text(dest_uri, &file_spec.filename, &file_spec.content).await {
             warn!("Failed to transfer recipe file {}: {}", file_spec.filename, e);
         }
-        if state.manager.config().file_transfer_uri_2_enabled {
-            if let Some(dest2) = &state.manager.config().file_transfer_uri_2 {
+        if state.manager.config().file_transfer_uri_2_enabled
+            && let Some(dest2) = &state.manager.config().file_transfer_uri_2 {
                 let _ = FileTransferService::transfer_text(dest2, &file_spec.filename, &file_spec.content).await;
             }
-        }
         transfer_summaries.push(json!({
             "filename": file_spec.filename,
             "priority": file_spec.priority,

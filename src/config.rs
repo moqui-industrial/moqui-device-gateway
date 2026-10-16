@@ -72,23 +72,19 @@ impl AppConfig {
         }
 
         let get = |key: &str, alt_env: Option<&str>, default: &str| -> String {
-            if let Ok(val) = env::var(key) {
-                if !val.trim().is_empty() {
+            if let Ok(val) = env::var(key)
+                && !val.trim().is_empty() {
                     return val.trim().to_string();
                 }
-            }
-            if let Some(alt) = alt_env {
-                if let Ok(val) = env::var(alt) {
-                    if !val.trim().is_empty() {
+            if let Some(alt) = alt_env
+                && let Ok(val) = env::var(alt)
+                    && !val.trim().is_empty() {
                         return val.trim().to_string();
                     }
-                }
-            }
-            if let Some(val) = props.get(key) {
-                if !val.trim().is_empty() {
+            if let Some(val) = props.get(key)
+                && !val.trim().is_empty() {
                     return val.trim().to_string();
                 }
-            }
             default.to_string()
         };
 
