@@ -4,9 +4,9 @@
 #   docker compose -f docker/postgres-compose.yml -p moqui-gateway up -d
 #
 # This Compose file initializes the local test database automatically with:
-#   - src/test/resources/db/init.sql
-#   - src/test/resources/device-gateway-seed.sql
-#   - src/test/resources/device-gateway-opcua-seed.sql
+#   - tests/resources/db/init.sql
+#   - tests/resources/device-gateway-seed.sql
+#   - tests/resources/device-gateway-opcua-seed.sql
 #
 # The seed templates are expanded at first container initialization using the
 # environment variables below. Remove the named volume if you want the init
@@ -37,8 +37,8 @@ services:
       POSTGRES_USER: moqui
       POSTGRES_PASSWORD: moqui
       GATEWAY_SEED_SUFFIX: "01"
-      GATEWAY_MQTT_PUBLISH_BASE_URI: "paho-mqtt5:?brokerUrl=tcp://localhost:1883&userName=artemis&password=artemis"
-      GATEWAY_MQTT_SUBSCRIBE_BASE_URI: "paho-mqtt5:?brokerUrl=tcp://localhost:1883&userName=artemis&password=artemis"
+      GATEWAY_MQTT_PUBLISH_BASE_URI: "paho-mqtt5:?brokerUrl=tcp://host.docker.internal:1883&userName=artemis&password=artemis"
+      GATEWAY_MQTT_SUBSCRIBE_BASE_URI: "paho-mqtt5:?brokerUrl=tcp://host.docker.internal:1883&userName=artemis&password=artemis"
       GATEWAY_OPCUA_TRANSPORT_CONFIG: "host.docker.internal:12686/milo"
       GATEWAY_OPCUA_FEEDBACK_NODE: "ns=2;s=virtual_plc_feedback"
       GATEWAY_OPCUA_FAULT_NODE: "ns=2;s=virtual_plc_fault"

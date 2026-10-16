@@ -108,13 +108,17 @@ fn test_partition_plc_log_batch() {
         }
     }"#;
 
-    let batch = Normalizer::partition_plc_log_batch(sample_batch).expect("Partitioning should succeed");
-    
+    let batch =
+        Normalizer::partition_plc_log_batch(sample_batch).expect("Partitioning should succeed");
+
     // Entry 0 has source -> with_source
     assert_eq!(batch.with_source.len(), 1);
     assert_eq!(batch.with_source[0].parameter_id, "PARAM_FEEDBACK_01");
     assert_eq!(batch.with_source[0].numeric_value, Some(300.05));
-    assert_eq!(batch.with_source[0].purpose_enum_id.as_deref(), Some("DrpLogging"));
+    assert_eq!(
+        batch.with_source[0].purpose_enum_id.as_deref(),
+        Some("DrpLogging")
+    );
 
     // Entry 1 has no source -> without_source (DeviceLog)
     assert_eq!(batch.without_source.len(), 1);
@@ -176,7 +180,8 @@ fn test_opcua_node_id_parsing() {
     assert_eq!(node_id_num.namespace, 0);
 
     let plain_string = "Line1.Conveyor.Running";
-    let node_id_plain = OpcUaService::parse_node_id(plain_string).expect("Should parse plain string");
+    let node_id_plain =
+        OpcUaService::parse_node_id(plain_string).expect("Should parse plain string");
     assert_eq!(node_id_plain.namespace, 2);
 }
 
@@ -196,4 +201,59 @@ fn test_security_config_validator() {
     config.profile = "local".to_string();
     config.api_auth_token = "change-me-in-production".to_string();
     assert!(config.validate_security().is_ok());
+}
+
+#[tokio::test]
+async fn test_file_transfer_confines_filename_and_replaces_contents() {
+    use moqui_device_gateway::protocols::FileTransferService;
+    let dir = std::env::temp_dir().join(format!("moqui-transfer-test-{}", uuid::Uuid::new_v4()));
+    for filename in ["../escape", "/absolute", "a/b", "a\\b", "", ".", ".."] {
+        assert!(
+            FileTransferService::transfer_bytes(dir.to_str().unwrap(), filename, b"x")
+                .await
+                .is_err()
+        );
+    }
+    FileTransferService::transfer_bytes(dir.to_str().unwrap(), "recipe.bin", &[0, 255, 17])
+        .await
+        .unwrap();
+    FileTransferService::transfer_bytes(dir.to_str().unwrap(), "recipe.bin", &[42])
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(dir.join("recipe.bin")).unwrap(), vec![42]);
+    assert!(
+        FileTransferService::transfer_bytes("https://invalid.example", "recipe.bin", b"x")
+            .await
+            .is_err()
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn test_mqtt_v5_does_not_complete_without_broker_acknowledgement() {
+    use moqui_device_gateway::protocols::MqttService;
+    use tokio::{io::AsyncReadExt, net::TcpListener};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = [0u8; 1024];
+        let n = socket.read(&mut bytes).await.unwrap();
+        let at = bytes[..n].windows(4).position(|w| w == b"MQTT").unwrap();
+        assert_eq!(bytes[at + 4], 5, "must use MQTT v5");
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    });
+    let context: RequestContext = serde_json::from_value(serde_json::json!({
+        "request_name":"ack-probe", "request_type_enum_id":"DrtWrite", "timeout":1,
+        "broker_uri":format!("paho-mqtt5:?brokerUrl=tcp://127.0.0.1:{port}&password=must-not-leak"),
+        "request_query":"test/ack-probe", "items":[{"parameter_id":"P1", "numeric_value":1.0}]
+    }))
+    .unwrap();
+    let config = AppConfig::load();
+    let error = MqttService::run_mqtt_write(&context, &config)
+        .await
+        .unwrap_err();
+    assert!(error.contains("timed out"));
+    assert!(!error.contains("must-not-leak"));
+    peer.await.unwrap();
 }

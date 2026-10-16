@@ -47,73 +47,73 @@ INSERT INTO DEVICE_GROUP_MEMBER (DEVICE_ID, MEMBER_DEVICE_ID, PURPOSE_ENUM_ID, S
 VALUES ('DG_EDGE___SUFFIX__', 'DRV_EDGE___SUFFIX__', 'DgmpDrive', 3, 'DgmsAlive');
 
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestCellHeartbeatDef___SUFFIX__', 'PtNumberInteger', 'CELL-__SUFFIX__-01', 'Test Cell Heartbeat');
+VALUES ('TestCellHeartbeatDef', 'PtNumberInteger', 'CELL-__SUFFIX__-01', 'Test Cell Heartbeat');
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID, NUMERIC_VALUE)
-VALUES ('TestCellHeartbeatParam___SUFFIX__', 'TestCellHeartbeatDef___SUFFIX__', 'DG_EDGE___SUFFIX__', 1000);
+VALUES ('TestCellHeartbeatParam', 'TestCellHeartbeatDef', 'DG_EDGE___SUFFIX__', 1000);
 
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestDriveSpeedSetpointDef___SUFFIX__', 'PtNumberInteger', 'DRV-__SUFFIX__-01', 'Drive Speed Setpoint');
+VALUES ('TestDriveSpeedSetpointDef', 'PtNumberInteger', 'DRV-__SUFFIX__-01', 'Drive Speed Setpoint');
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestDriveTorqueLimitDef___SUFFIX__', 'PtNumberInteger', 'DRV-__SUFFIX__-02', 'Drive Torque Limit');
+VALUES ('TestDriveTorqueLimitDef', 'PtNumberInteger', 'DRV-__SUFFIX__-02', 'Drive Torque Limit');
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID, NUMERIC_VALUE)
-VALUES ('TestDriveSpeedSetpointParam___SUFFIX__', 'TestDriveSpeedSetpointDef___SUFFIX__', 'DRV_EDGE___SUFFIX__', 1500);
+VALUES ('TestDriveSpeedSetpointParam', 'TestDriveSpeedSetpointDef', 'DRV_EDGE___SUFFIX__', 1500);
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID, NUMERIC_VALUE)
-VALUES ('TestDriveTorqueLimitParam___SUFFIX__', 'TestDriveTorqueLimitDef___SUFFIX__', 'DRV_EDGE___SUFFIX__', 180);
+VALUES ('TestDriveTorqueLimitParam', 'TestDriveTorqueLimitDef', 'DRV_EDGE___SUFFIX__', 180);
 
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestPlcReferenceDef___SUFFIX__', 'PtNumberDecimal', 'PLC-__SUFFIX__-24.01', 'Reference');
+VALUES ('TestPlcReferenceDef', 'PtNumberDecimal', 'PLC-__SUFFIX__-24.01', 'Reference');
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestPlcFeedbackDef___SUFFIX__', 'PtNumberDecimal', 'PLC-__SUFFIX__-24.02', 'Feedback');
+VALUES ('TestPlcFeedbackDef', 'PtNumberDecimal', 'PLC-__SUFFIX__-24.02', 'Feedback');
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestPlcMainControlWordDef___SUFFIX__', 'PtTextShort', 'PLC-__SUFFIX__-24.03', 'MainControlWord');
+VALUES ('TestPlcMainControlWordDef', 'PtTextShort', 'PLC-__SUFFIX__-24.03', 'MainControlWord');
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestPlcMainStatusWordDef___SUFFIX__', 'PtTextShort', 'PLC-__SUFFIX__-24.04', 'MainStatusWord');
+VALUES ('TestPlcMainStatusWordDef', 'PtTextShort', 'PLC-__SUFFIX__-24.04', 'MainStatusWord');
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestPlcFaultDef___SUFFIX__', 'PtTextIndicator', 'PLC-__SUFFIX__-24.05', 'Fault');
+VALUES ('TestPlcFaultDef', 'PtTextIndicator', 'PLC-__SUFFIX__-24.05', 'Fault');
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestPlcRecipeReferenceDef___SUFFIX__', 'PtNumberDecimal', 'PLC-__SUFFIX__-24.11', 'RecipeReference');
+VALUES ('TestPlcRecipeReferenceDef', 'PtNumberDecimal', 'PLC-__SUFFIX__-24.11', 'RecipeReference');
 INSERT INTO PARAMETER_DEF (PARAMETER_DEF_ID, PARAMETER_TYPE_ENUM_ID, PARAMETER_CODE, PARAMETER_NAME)
-VALUES ('TestPlcRecipeStateDef___SUFFIX__', 'PtTextShort', 'PLC-__SUFFIX__-24.12', 'RecipeState');
+VALUES ('TestPlcRecipeStateDef', 'PtTextShort', 'PLC-__SUFFIX__-24.12', 'RecipeState');
 
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID, NUMERIC_VALUE)
-VALUES ('TestPlcReferenceParam___SUFFIX__', 'TestPlcReferenceDef___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 300.00);
+VALUES ('TestPlcReferenceParam', 'TestPlcReferenceDef', 'VIRTUAL_PLC___SUFFIX__', 300.00);
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID, NUMERIC_VALUE)
-VALUES ('TestPlcFeedbackParam___SUFFIX__', 'TestPlcFeedbackDef___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 300.03);
+VALUES ('TestPlcFeedbackParam', 'TestPlcFeedbackDef', 'VIRTUAL_PLC___SUFFIX__', 300.03);
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID, SYMBOLIC_VALUE)
-VALUES ('TestPlcMainControlWordParam___SUFFIX__', 'TestPlcMainControlWordDef___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'START');
+VALUES ('TestPlcMainControlWordParam', 'TestPlcMainControlWordDef', 'VIRTUAL_PLC___SUFFIX__', 'START');
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID, SYMBOLIC_VALUE)
-VALUES ('TestPlcMainStatusWordParam___SUFFIX__', 'TestPlcMainStatusWordDef___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'READY');
+VALUES ('TestPlcMainStatusWordParam', 'TestPlcMainStatusWordDef', 'VIRTUAL_PLC___SUFFIX__', 'READY');
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_ID, SYMBOLIC_VALUE)
-VALUES ('TestPlcFaultParam___SUFFIX__', 'TestPlcFaultDef___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'N');
+VALUES ('TestPlcFaultParam', 'TestPlcFaultDef', 'VIRTUAL_PLC___SUFFIX__', 'N');
 
 INSERT INTO DEVICE_REQUEST (REQUEST_NAME, DEVICE_ID, REQUEST_TYPE_ENUM_ID, PURPOSE_ENUM_ID, ROUTER_ENUM_ID, BROKER_URI, ONLY_CHANGED_PARAMETERS)
-VALUES ('TestPlcMqttPublishReq___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtWrite', 'DrpControl', 'DrrMoquiDeviceGateway', '__MQTT_PUBLISH_BASE_URI__', 'N');
+VALUES ('TestPlcMqttPublishReq__SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtWrite', 'DrpControl', 'DrrMoquiDeviceGateway', '__MQTT_PUBLISH_BASE_URI__', 'N');
 INSERT INTO DEVICE_REQUEST_ITEM (REQUEST_NAME, PARAMETER_ID, REQUEST_ITEM_NAME, SEQUENCE_NUM, QUERY)
-VALUES ('TestPlcMqttPublishReq___SUFFIX__', 'TestPlcReferenceParam___SUFFIX__', 'reference', 1, 'mqtt-write-device-request/virtual-plc/reference');
+VALUES ('TestPlcMqttPublishReq__SUFFIX__', 'TestPlcReferenceParam', 'virtualPlcReference', 1, 'mqtt-write-device-request/virtual-plc/reference');
 INSERT INTO DEVICE_REQUEST_ITEM (REQUEST_NAME, PARAMETER_ID, REQUEST_ITEM_NAME, SEQUENCE_NUM, QUERY)
-VALUES ('TestPlcMqttPublishReq___SUFFIX__', 'TestPlcMainControlWordParam___SUFFIX__', 'mainControlWord', 2, 'mqtt-write-device-request/virtual-plc/main-control-word');
+VALUES ('TestPlcMqttPublishReq__SUFFIX__', 'TestPlcMainControlWordParam', 'virtualPlcMainControlWord', 2, 'mqtt-write-device-request/virtual-plc/main-control-word');
 
 INSERT INTO DEVICE_REQUEST (REQUEST_NAME, DEVICE_ID, REQUEST_TYPE_ENUM_ID, PURPOSE_ENUM_ID, ROUTER_ENUM_ID, BROKER_URI, POLLING_INTERVAL)
-VALUES ('TestPlcMqttSubscribeReq___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtCyclic', 'DrpControl', 'DrrMoquiDeviceGateway', '__MQTT_SUBSCRIBE_BASE_URI__', 100);
+VALUES ('TestPlcMqttSubscribeReq__SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtCyclic', 'DrpControl', 'DrrMoquiDeviceGateway', '__MQTT_SUBSCRIBE_BASE_URI__', 100);
 INSERT INTO DEVICE_REQUEST_ITEM (REQUEST_NAME, PARAMETER_ID, SEQUENCE_NUM, QUERY)
-VALUES ('TestPlcMqttSubscribeReq___SUFFIX__', 'TestPlcFeedbackParam___SUFFIX__', 1, 'mqtt-subscribe-device-request/virtual-plc/feedback');
+VALUES ('TestPlcMqttSubscribeReq__SUFFIX__', 'TestPlcFeedbackParam', 1, 'mqtt-subscribe-device-request/virtual-plc/feedback');
 INSERT INTO DEVICE_REQUEST_ITEM (REQUEST_NAME, PARAMETER_ID, SEQUENCE_NUM, QUERY)
-VALUES ('TestPlcMqttSubscribeReq___SUFFIX__', 'TestPlcFaultParam___SUFFIX__', 2, 'mqtt-subscribe-device-request/virtual-plc/fault');
+VALUES ('TestPlcMqttSubscribeReq__SUFFIX__', 'TestPlcFaultParam', 2, 'mqtt-subscribe-device-request/virtual-plc/fault');
 
 INSERT INTO DEVICE_REQUEST (REQUEST_NAME, PARENT_REQUEST_NAME, DEVICE_ID, REQUEST_TYPE_ENUM_ID, PURPOSE_ENUM_ID, ROUTER_ENUM_ID, BROKER_URI)
-VALUES ('TestPlcMqttUnsubscribeReq___SUFFIX__', 'TestPlcMqttSubscribeReq___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtUnsubscribe', 'DrpControl', 'DrrMoquiDeviceGateway', '__MQTT_SUBSCRIBE_BASE_URI__');
+VALUES ('TestPlcMqttUnsubscribeReq__SUFFIX__', 'TestPlcMqttSubscribeReq__SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtUnsubscribe', 'DrpControl', 'DrrMoquiDeviceGateway', '__MQTT_SUBSCRIBE_BASE_URI__');
 
 INSERT INTO DEVICE_CONFIG (DEVICE_CONFIG_ID, CONFIG_NAME, CONFIG_TYPE_ENUM_ID, PURPOSE_ENUM_ID, DEVICE_TYPE_ENUM_ID)
-VALUES ('TestPlcGatewayConfig1___SUFFIX__', 'Test PLC Gateway Config', 'DctApplyConfig', 'DcpRunConfig', 'DtPLC');
+VALUES ('TestPlcGatewayConfig1', 'Test PLC Gateway Config', 'DctApplyConfig', 'DcpRunConfig', 'DtPLC');
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_CONFIG_ID, NUMERIC_VALUE)
-VALUES ('TestPlcRecipeReferenceCfgParam___SUFFIX__', 'TestPlcRecipeReferenceDef___SUFFIX__', 'TestPlcGatewayConfig1___SUFFIX__', 250.0);
+VALUES ('TestPlcRecipeReferenceCfgParam', 'TestPlcRecipeReferenceDef', 'TestPlcGatewayConfig1', 250.0);
 INSERT INTO PARAMETER (PARAMETER_ID, PARAMETER_DEF_ID, DEVICE_CONFIG_ID, SYMBOLIC_VALUE)
-VALUES ('TestPlcRecipeStateCfgParam___SUFFIX__', 'TestPlcRecipeStateDef___SUFFIX__', 'TestPlcGatewayConfig1___SUFFIX__', 'AUTO');
+VALUES ('TestPlcRecipeStateCfgParam', 'TestPlcRecipeStateDef', 'TestPlcGatewayConfig1', 'AUTO');
 
 INSERT INTO DEVICE_RULE_SET (DEVICE_RULE_SET_ID, RULE_SET_NAME, PURPOSE_ENUM_ID, DEVICE_ID)
-VALUES ('TestPlcGatewayRuleSet1___SUFFIX__', 'TestPlcGatewayRuleSet', 'DrspProcess', 'VIRTUAL_PLC___SUFFIX__');
+VALUES ('TestPlcGatewayRuleSet1', 'TestPlcGatewayRuleSet', 'DrspProcess', 'VIRTUAL_PLC___SUFFIX__');
 INSERT INTO DEVICE_RULE (DEVICE_RULE_ID, DEVICE_RULE_SET_ID, DEVICE_CONFIG_ID, DEVICE_ID, RULE_TYPE_ENUM_ID, RULE_NAME, PRIORITY)
-VALUES ('TestPlcGatewayRule010___SUFFIX__', 'TestPlcGatewayRuleSet1___SUFFIX__', 'TestPlcGatewayConfig1___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtApplyConfig', 'Apply Test PLC gateway config', 1);
+VALUES ('TestPlcGatewayRule010', 'TestPlcGatewayRuleSet1', 'TestPlcGatewayConfig1', 'VIRTUAL_PLC___SUFFIX__', 'DrtApplyConfig', 'Apply Test PLC gateway config', 1);
 
 -- -----------------------------------------------------------------------------
 -- Trajectory export seed data
@@ -123,17 +123,17 @@ VALUES ('TestPlcGatewayRule010___SUFFIX__', 'TestPlcGatewayRuleSet1___SUFFIX__',
 INSERT INTO APPROXIMATED_FUNCTION
     (APPROXIMATED_FUNCTION_ID, INTERPOLATION_ENUM_ID, PURPOSE_ENUM_ID, VECTOR_SPACE_ENUM_ID, CODOMAIN_TYPE_ENUM_ID, PARAMETRIZATION_DEGREE, DATA_STORAGE_ENUM_ID, NAME)
 VALUES
-    ('TestPlcTrajectory01___SUFFIX__', 'AfiPiecewise', 'AfpTrajectory', 'EuclideanSpace3D', 'AfctVector', 1, 'AfdsPointTable', 'Test PLC Trajectory');
+    ('TestPlcTrajectory01', 'AfiPiecewise', 'AfpTrajectory', 'EuclideanSpace3D', 'AfctVector', 1, 'AfdsPointTable', 'Test PLC Trajectory');
 
 INSERT INTO PARAMETRIC_PATH
     (APPROXIMATED_FUNCTION_ID, PROFILE_ENUM_ID)
 VALUES
-    ('TestPlcTrajectory01___SUFFIX__', 'PppfTrajectoryProfile');
+    ('TestPlcTrajectory01', 'PppfTrajectoryProfile');
 
 INSERT INTO TRAJECTORY
     (APPROXIMATED_FUNCTION_ID)
 VALUES
-    ('TestPlcTrajectory01___SUFFIX__');
+    ('TestPlcTrajectory01');
 
 INSERT INTO VECTOR (VECTOR_ID) VALUES ('VEC_PT1___SUFFIX__');
 INSERT INTO VECTOR (VECTOR_ID) VALUES ('VEC_PT2___SUFFIX__');
@@ -141,25 +141,25 @@ INSERT INTO VECTOR (VECTOR_ID) VALUES ('VEC_PT2___SUFFIX__');
 INSERT INTO APPROXIMATED_FUNCTION_SAMPLE
     (APPROXIMATED_FUNCTION_ID, APPROXIMATED_FUNCTION_SAMPLE_ID, SAMPLE_TYPE_ENUM_ID, SAMPLE_CODE, SAMPLE_NAME, SEQUENCE_NUM, SAMPLE_VECTOR_ID)
 VALUES
-    ('TestPlcTrajectory01___SUFFIX__', 'AFS_PT1___SUFFIX__', 'AfstWaypoint', 'WP0001', 'Waypoint 1', 1, 'VEC_PT1___SUFFIX__');
+    ('TestPlcTrajectory01', 'AFS_PT1___SUFFIX__', 'AfstWaypoint', 'WP0001', 'Waypoint 1', 1, 'VEC_PT1___SUFFIX__');
 INSERT INTO APPROXIMATED_FUNCTION_SAMPLE
     (APPROXIMATED_FUNCTION_ID, APPROXIMATED_FUNCTION_SAMPLE_ID, SAMPLE_TYPE_ENUM_ID, SAMPLE_CODE, SAMPLE_NAME, SEQUENCE_NUM, SAMPLE_VECTOR_ID)
 VALUES
-    ('TestPlcTrajectory01___SUFFIX__', 'AFS_PT2___SUFFIX__', 'AfstWaypoint', 'WP0002', 'Waypoint 2', 2, 'VEC_PT2___SUFFIX__');
+    ('TestPlcTrajectory01', 'AFS_PT2___SUFFIX__', 'AfstWaypoint', 'WP0002', 'Waypoint 2', 2, 'VEC_PT2___SUFFIX__');
 
 INSERT INTO PARAMETRIC_PATH_POINT
     (APPROXIMATED_FUNCTION_ID, APPROXIMATED_FUNCTION_SAMPLE_ID, TOLERANCE)
 VALUES
-    ('TestPlcTrajectory01___SUFFIX__', 'AFS_PT1___SUFFIX__', 10.0);
+    ('TestPlcTrajectory01', 'AFS_PT1___SUFFIX__', 10.0);
 INSERT INTO PARAMETRIC_PATH_POINT
     (APPROXIMATED_FUNCTION_ID, APPROXIMATED_FUNCTION_SAMPLE_ID, TOLERANCE)
 VALUES
-    ('TestPlcTrajectory01___SUFFIX__', 'AFS_PT2___SUFFIX__', NULL);
+    ('TestPlcTrajectory01', 'AFS_PT2___SUFFIX__', NULL);
 
 INSERT INTO TRAJECTORY_POINT (APPROXIMATED_FUNCTION_ID, APPROXIMATED_FUNCTION_SAMPLE_ID, IS_BREAK_POINT, BLENDING_ENUM_ID, POINT_TIME_OFFSET_MILLIS)
-VALUES ('TestPlcTrajectory01___SUFFIX__', 'AFS_PT1___SUFFIX__', 'N', NULL, 500.0);
+VALUES ('TestPlcTrajectory01', 'AFS_PT1___SUFFIX__', 'N', NULL, 500.0);
 INSERT INTO TRAJECTORY_POINT (APPROXIMATED_FUNCTION_ID, APPROXIMATED_FUNCTION_SAMPLE_ID, IS_BREAK_POINT, BLENDING_ENUM_ID, POINT_TIME_OFFSET_MILLIS)
-VALUES ('TestPlcTrajectory01___SUFFIX__', 'AFS_PT2___SUFFIX__', 'Y', NULL, 1000.0);
+VALUES ('TestPlcTrajectory01', 'AFS_PT2___SUFFIX__', 'Y', NULL, 1000.0);
 
 INSERT INTO VECTOR_COMPONENT (VECTOR_ID, VECTOR_COMPONENT_ID, DIMENSION_INDEX, REAL_VALUE)
 VALUES ('VEC_PT1___SUFFIX__', 'VC_PT1_0___SUFFIX__', 0, 100.0);
@@ -175,9 +175,9 @@ INSERT INTO VECTOR_COMPONENT (VECTOR_ID, VECTOR_COMPONENT_ID, DIMENSION_INDEX, R
 VALUES ('VEC_PT2___SUFFIX__', 'VC_PT2_2___SUFFIX__', 2, 350.0);
 
 INSERT INTO DEVICE_CONFIG (DEVICE_CONFIG_ID, CONFIG_NAME, DEVICE_TYPE_ENUM_ID, APPROXIMATED_FUNCTION_ID)
-VALUES ('TestPlcTrajectoryConfig1___SUFFIX__', 'Test PLC Trajectory Config', 'DtPLC', 'TestPlcTrajectory01___SUFFIX__');
+VALUES ('TestPlcTrajectoryConfig1', 'Test PLC Trajectory Config', 'DtPLC', 'TestPlcTrajectory01');
 
 INSERT INTO DEVICE_RULE_SET (DEVICE_RULE_SET_ID, RULE_SET_NAME, PURPOSE_ENUM_ID, DEVICE_ID)
-VALUES ('TestPlcTrajectoryRuleSet1___SUFFIX__', 'TestPlcTrajectoryRuleSet', 'DrspProcess', 'VIRTUAL_PLC___SUFFIX__');
+VALUES ('TestPlcTrajectoryRuleSet1', 'TestPlcTrajectoryRuleSet', 'DrspProcess', 'VIRTUAL_PLC___SUFFIX__');
 INSERT INTO DEVICE_RULE (DEVICE_RULE_ID, DEVICE_RULE_SET_ID, DEVICE_CONFIG_ID, DEVICE_ID, RULE_TYPE_ENUM_ID, RULE_NAME, PRIORITY)
-VALUES ('TestPlcTrajectoryRule010___SUFFIX__', 'TestPlcTrajectoryRuleSet1___SUFFIX__', 'TestPlcTrajectoryConfig1___SUFFIX__', 'VIRTUAL_PLC___SUFFIX__', 'DrtApplyConfig', 'Apply Test PLC trajectory config', 1);
+VALUES ('TestPlcTrajectoryRule010', 'TestPlcTrajectoryRuleSet1', 'TestPlcTrajectoryConfig1', 'VIRTUAL_PLC___SUFFIX__', 'DrtApplyConfig', 'Apply Test PLC trajectory config', 1);

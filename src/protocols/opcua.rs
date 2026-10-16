@@ -2,13 +2,11 @@ use crate::config::AppConfig;
 use crate::db::DatabaseService;
 use crate::model::{RequestContext, RequestItem};
 use crate::pipeline::{InboundErrorNotifier, Normalizer};
-use opcua::client::{
-    ClientBuilder, DataChangeCallback, IdentityToken, MonitoredItem, Session,
-};
+use opcua::client::{ClientBuilder, DataChangeCallback, IdentityToken, MonitoredItem, Session};
 use opcua::types::{
-    AttributeId, DataValue, EndpointDescription, MessageSecurityMode,
-    MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters, NodeId, ReadValueId,
-    TimestampsToReturn, UserTokenPolicy, Variant, WriteValue,
+    AttributeId, DataValue, EndpointDescription, MessageSecurityMode, MonitoredItemCreateRequest,
+    MonitoringMode, MonitoringParameters, NodeId, ReadValueId, TimestampsToReturn, UserTokenPolicy,
+    Variant, WriteValue,
 };
 use serde_json::json;
 use std::str::FromStr;
@@ -17,6 +15,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 pub struct OpcUaService;
+
+struct SessionLoop(tokio::task::JoinHandle<opcua::types::StatusCode>);
+impl Drop for SessionLoop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 impl OpcUaService {
     /// Builds endpoint description from RequestContext
@@ -101,8 +106,16 @@ impl OpcUaService {
             .await
             .map_err(|e| format!("OPC UA connect error to {}: {:?}", endpoint_url, e))?;
 
-        let _loop_handle = event_loop.spawn();
-        session.wait_for_connection().await;
+        let _loop_guard = SessionLoop(event_loop.spawn());
+        let connected = tokio::time::timeout(
+            Duration::from_secs(context.timeout.unwrap_or(30).max(1) as u64),
+            session.wait_for_connection(),
+        )
+        .await
+        .map_err(|_| "OPC UA connection timed out".to_string())?;
+        if !connected {
+            return Err("OPC UA session connection failed".into());
+        }
 
         let mut read_nodes = Vec::new();
         let mut source_queries = Vec::new();
@@ -113,7 +126,10 @@ impl OpcUaService {
                 .as_deref()
                 .or(context.request_query.as_deref())
                 .ok_or_else(|| {
-                    format!("Missing query for request {} item {}", context.request_name, item.parameter_id)
+                    format!(
+                        "Missing query for request {} item {}",
+                        context.request_name, item.parameter_id
+                    )
                 })?;
 
             let node_id = Self::parse_node_id(query)?;
@@ -128,6 +144,9 @@ impl OpcUaService {
 
         let mut normalized_rows = Vec::new();
         for (i, val) in values.into_iter().enumerate() {
+            if val.status.is_some_and(|status| status.is_bad()) || val.value.is_none() {
+                return Err("OPC UA server returned a bad or empty read result".into());
+            }
             let query = &source_queries[i];
             let raw_str = variant_to_string(&val.value);
             let rows = Normalizer::normalize_inbound_payload(context, query, &raw_str);
@@ -169,7 +188,7 @@ impl OpcUaService {
         let endpoint_url = Self::resolve_endpoint_url(context)?;
         info!("Connecting to OPC UA endpoint for write: {}", endpoint_url);
 
-        let timeout_ms = context.timeout.map(|t| t * 1000).unwrap_or(5000);
+        let timeout_ms = context.timeout.unwrap_or(5).max(1).saturating_mul(1000);
 
         let mut client = ClientBuilder::new()
             .application_name("moqui-device-gateway")
@@ -192,8 +211,16 @@ impl OpcUaService {
             .await
             .map_err(|e| format!("OPC UA connect error to {}: {:?}", endpoint_url, e))?;
 
-        let _loop_handle = event_loop.spawn();
-        session.wait_for_connection().await;
+        let _loop_guard = SessionLoop(event_loop.spawn());
+        let connected = tokio::time::timeout(
+            Duration::from_secs(context.timeout.unwrap_or(30).max(1) as u64),
+            session.wait_for_connection(),
+        )
+        .await
+        .map_err(|_| "OPC UA connection timed out".to_string())?;
+        if !connected {
+            return Err("OPC UA session connection failed".into());
+        }
 
         let mut publish_uri_list = Vec::new();
         for item in &context.items {
@@ -202,7 +229,10 @@ impl OpcUaService {
                 .as_deref()
                 .or(context.request_query.as_deref())
                 .ok_or_else(|| {
-                    format!("Missing node definition for request {} item {}", context.request_name, item.parameter_id)
+                    format!(
+                        "Missing node definition for request {} item {}",
+                        context.request_name, item.parameter_id
+                    )
                 })?;
 
             let node_id = Self::parse_node_id(query)?;
@@ -221,22 +251,23 @@ impl OpcUaService {
 
         if config.opcua_write_after_publish_enabled
             && let Some(uri) = &config.opcua_write_after_publish_uri
-                && (uri.starts_with("http://") || uri.starts_with("https://")) {
-                    let client = reqwest::Client::new();
-                    let payload = json!({
-                        "eventType": "writeCompleted",
-                        "requestName": context.request_name,
-                        "status": "completed",
-                        "protocol": "OPC UA",
-                        "routeId": "opcua-write-device-request",
-                        "rowCount": context.items.len(),
-                        "publishUriList": publish_uri_list
-                    });
-                    let u = uri.clone();
-                    tokio::spawn(async move {
-                        let _ = client.post(&u).json(&payload).send().await;
-                    });
-                }
+            && (uri.starts_with("http://") || uri.starts_with("https://"))
+        {
+            let client = reqwest::Client::new();
+            let payload = json!({
+                "eventType": "writeCompleted",
+                "requestName": context.request_name,
+                "status": "completed",
+                "protocol": "OPC UA",
+                "routeId": "opcua-write-device-request",
+                "rowCount": context.items.len(),
+                "publishUriList": publish_uri_list
+            });
+            let u = uri.clone();
+            tokio::spawn(async move {
+                let _ = client.post(&u).json(&payload).send().await;
+            });
+        }
 
         Ok(json!({
             "status": "completed",
@@ -256,10 +287,13 @@ impl OpcUaService {
         cancel_token: CancellationToken,
     ) -> Result<(), String> {
         let endpoint_url = Self::resolve_endpoint_url(&context)?;
-        info!("Starting OPC UA subscription for route {} on {}", route_id, endpoint_url);
+        info!(
+            "Starting OPC UA subscription for route {} on {}",
+            route_id, endpoint_url
+        );
 
         let node_id = Self::parse_node_id(&node_query)?;
-        let polling_interval = context.polling_interval.unwrap_or(100) as u64;
+        let polling_interval = context.polling_interval.unwrap_or(100).max(1) as u64;
 
         let mut client = ClientBuilder::new()
             .application_name("moqui-device-gateway")
@@ -282,8 +316,16 @@ impl OpcUaService {
             .await
             .map_err(|e| format!("OPC UA connect error to {}: {:?}", endpoint_url, e))?;
 
-        let _loop_handle = event_loop.spawn();
-        session.wait_for_connection().await;
+        let _loop_guard = SessionLoop(event_loop.spawn());
+        let connected = tokio::time::timeout(
+            Duration::from_secs(context.timeout.unwrap_or(30).max(1) as u64),
+            session.wait_for_connection(),
+        )
+        .await
+        .map_err(|_| "OPC UA connection timed out".to_string())?;
+        if !connected {
+            return Err("OPC UA session connection failed".into());
+        }
 
         let db_clone = db.clone();
         let notifier_clone = notifier.clone();
@@ -320,7 +362,12 @@ impl OpcUaService {
                     Err(e) => {
                         warn!("DB persistence failed for OPC UA route {}: {}", route_id, e);
                         notifier
-                            .record_error(&route_id, Some(&context.request_name), "OPC UA", &e.to_string())
+                            .record_error(
+                                &route_id,
+                                Some(&context.request_name),
+                                "OPC UA",
+                                &e.to_string(),
+                            )
                             .await;
                     }
                 }
@@ -353,9 +400,14 @@ impl OpcUaService {
 
         let route_for_cancel = route_id.clone();
         tokio::spawn(async move {
+            let _loop_guard = _loop_guard;
             cancel_token.cancelled().await;
-            info!("OPC UA subscription cancelled for route {}", route_for_cancel);
+            info!(
+                "OPC UA subscription cancelled for route {}",
+                route_for_cancel
+            );
             let _ = session.delete_subscriptions(&[sub_id]).await;
+            let _ = session.disconnect().await;
         });
 
         Ok(())
@@ -375,9 +427,10 @@ async fn write_with_retry(
         match session.write(std::slice::from_ref(&write_val)).await {
             Ok(status_codes) => {
                 if let Some(sc) = status_codes.first()
-                    && sc.is_good() {
-                        return Ok(());
-                    }
+                    && sc.is_good()
+                {
+                    return Ok(());
+                }
             }
             Err(e) => {
                 debug!("OPC UA write attempt {} failed: {:?}", attempts, e);
@@ -407,7 +460,13 @@ fn resolve_outbound_variant(item: &RequestItem) -> Variant {
 
 fn variant_to_string(variant: &Option<Variant>) -> String {
     match variant {
-        Some(Variant::Boolean(b)) => if *b { "true".to_string() } else { "false".to_string() },
+        Some(Variant::Boolean(b)) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
         Some(Variant::SByte(v)) => v.to_string(),
         Some(Variant::Byte(v)) => v.to_string(),
         Some(Variant::Int16(v)) => v.to_string(),

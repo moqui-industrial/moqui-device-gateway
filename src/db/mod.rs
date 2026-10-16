@@ -21,14 +21,14 @@ pub struct ExportRow {
 
 impl DatabaseService {
     pub async fn init(moqui_url: &str, log_url: &str) -> Result<Self, sqlx::Error> {
-        info!("Connecting to Moqui transactional DB: {}", moqui_url);
+        info!("Connecting to Moqui transactional DB");
         let moqui_pool = PgPoolOptions::new()
             .max_connections(10)
             .min_connections(2)
             .connect(moqui_url)
             .await?;
 
-        info!("Connecting to Moqui Log/Telemetry DB: {}", log_url);
+        info!("Connecting to Moqui Log/Telemetry DB");
         let log_pool = if log_url == moqui_url {
             moqui_pool.clone()
         } else {
@@ -45,7 +45,10 @@ impl DatabaseService {
         })
     }
 
-    pub async fn inspect_gateway_identity(&self, gateway_device_id: &str) -> Result<GatewayIdentityStatus, sqlx::Error> {
+    pub async fn inspect_gateway_identity(
+        &self,
+        gateway_device_id: &str,
+    ) -> Result<GatewayIdentityStatus, sqlx::Error> {
         if gateway_device_id.trim().is_empty() {
             return Ok(GatewayIdentityStatus {
                 gateway_device_id: "".to_string(),
@@ -68,8 +71,7 @@ impl DatabaseService {
         )
         .bind(gateway_device_id)
         .fetch_one(&self.moqui_pool)
-        .await
-        .unwrap_or(false);
+        .await?;
 
         if !physical_exists {
             return Ok(GatewayIdentityStatus {
@@ -77,7 +79,10 @@ impl DatabaseService {
                 configured: crate::model::boolean_alias::Bool(true),
                 physical_device_exists: false,
                 gateway_member_found: false,
-                message: format!("Configured gateway.device.id {} does not exist as Device + PhysicalDevice.", gateway_device_id),
+                message: format!(
+                    "Configured gateway.device.id {} does not exist as Device + PhysicalDevice.",
+                    gateway_device_id
+                ),
             });
         }
 
@@ -92,14 +97,16 @@ impl DatabaseService {
         )
         .bind(gateway_device_id)
         .fetch_one(&self.moqui_pool)
-        .await
-        .unwrap_or(0);
+        .await?;
 
         let gateway_member_found = count > 0;
         let message = if gateway_member_found {
             "ready".to_string()
         } else {
-            format!("Gateway {} is not assigned to any DeviceGroup as DgmpEdgeGateway.", gateway_device_id)
+            format!(
+                "Gateway {} is not assigned to any DeviceGroup as DgmpEdgeGateway.",
+                gateway_device_id
+            )
         };
 
         Ok(GatewayIdentityStatus {
@@ -111,7 +118,11 @@ impl DatabaseService {
         })
     }
 
-    pub async fn assert_gateway_scope(&self, gateway_device_id: &str, target_device_id: &str) -> Result<bool, sqlx::Error> {
+    pub async fn assert_gateway_scope(
+        &self,
+        gateway_device_id: &str,
+        target_device_id: &str,
+    ) -> Result<bool, sqlx::Error> {
         let count: i64 = sqlx::query_scalar(
             r#"
             WITH RECURSIVE root_groups (DEVICE_ID) AS (
@@ -147,7 +158,10 @@ impl DatabaseService {
         Ok(count > 0)
     }
 
-    pub async fn load_startup_subscription_request_names(&self, gateway_device_id: &str) -> Result<Vec<String>, sqlx::Error> {
+    pub async fn load_startup_subscription_request_names(
+        &self,
+        gateway_device_id: &str,
+    ) -> Result<Vec<String>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
             WITH RECURSIVE root_groups (DEVICE_ID) AS (
@@ -202,10 +216,16 @@ impl DatabaseService {
         .fetch_all(&self.moqui_pool)
         .await?;
 
-        Ok(rows.into_iter().map(|r| r.get::<String, _>("REQUEST_NAME")).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| r.get::<String, _>("REQUEST_NAME"))
+            .collect())
     }
 
-    pub async fn load_request_context(&self, request_name: &str) -> Result<RequestContext, sqlx::Error> {
+    pub async fn load_request_context(
+        &self,
+        request_name: &str,
+    ) -> Result<RequestContext, sqlx::Error> {
         let req_row = sqlx::query(
             r#"
             SELECT dr.REQUEST_NAME AS "REQUEST_NAME", dr.DEVICE_ID AS "DEVICE_ID", dr.PARENT_REQUEST_NAME AS "PARENT_REQUEST_NAME", dr.REQUEST_TYPE_ENUM_ID AS "REQUEST_TYPE_ENUM_ID",
@@ -253,7 +273,7 @@ impl DatabaseService {
 
         let items_rows = sqlx::query(
             r#"
-            SELECT CAST(dri.SEQUENCE_NUM AS INT4) AS "SEQUENCE_NUM", dri.PARAMETER_ID AS "PARAMETER_ID", dri.REQUEST_ITEM_NAME AS "REQUEST_ITEM_NAME",
+            SELECT DISTINCT CAST(dri.SEQUENCE_NUM AS INT4) AS "SEQUENCE_NUM", dri.PARAMETER_ID AS "PARAMETER_ID", dri.REQUEST_ITEM_NAME AS "REQUEST_ITEM_NAME",
                 p.NUMERIC_VALUE AS "NUMERIC_VALUE", p.SYMBOLIC_VALUE AS "SYMBOLIC_VALUE", p.PARAMETER_ENUM_ID AS "PARAMETER_ENUM_ID",
                 COALESCE(dri.QUERY, dr.QUERY) AS "TARGET_QUERY"
             FROM DEVICE_REQUEST dr
@@ -265,9 +285,9 @@ impl DatabaseService {
                 AND eal.CHANGED_DATE > dr.LAST_UPDATED_STAMP
             WHERE dr.REQUEST_NAME = $1
                 AND (dr.REQUEST_TYPE_ENUM_ID <> 'DrtWrite'
-                    OR dr.ONLY_CHANGED_PARAMETERS <> 'Y'
+                    OR COALESCE(dr.ONLY_CHANGED_PARAMETERS, 'N') <> 'Y'
                     OR eal.PK_PRIMARY_VALUE IS NOT NULL)
-            ORDER BY dri.SEQUENCE_NUM, dri.PARAMETER_ID
+            ORDER BY "SEQUENCE_NUM", "PARAMETER_ID"
             "#,
         )
         .bind(request_name)
@@ -351,21 +371,34 @@ impl DatabaseService {
         }
 
         let mut tx = self.log_pool.begin().await?;
-        let base_seq = jiff::Timestamp::now().as_millisecond();
-        for (idx, row) in rows.iter().enumerate() {
+        // Allocate sequences under per-parameter transaction locks. Millisecond
+        // timestamps collide when two subscriptions store the same parameter.
+        // Lock in a stable order so overlapping batches cannot deadlock.
+        let ids: std::collections::BTreeSet<&str> =
+            rows.iter().map(|r| r.parameter_id.as_str()).collect();
+        for id in ids {
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        for row in rows {
             let log_id = row
                 .parameter_log_id
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let seq_num = row.sequence_num.unwrap_or(base_seq + idx as i64);
+            let seq_num = if let Some(sequence) = row.sequence_num {
+                sequence
+            } else {
+                sqlx::query_scalar::<_, i64>("SELECT CAST(COALESCE(MAX(SEQUENCE_NUM), 0) + 1 AS BIGINT) FROM PARAMETER_LOG WHERE PARAMETER_ID=$1")
+                    .bind(&row.parameter_id).fetch_one(&mut *tx).await?
+            };
 
             let dec_val: Option<rust_decimal::Decimal> = row
                 .numeric_value
                 .and_then(|v| rust_decimal::Decimal::from_str_exact(&v.to_string()).ok());
 
-            let observed_str = row
-                .observed_date
-                .map(|t| t.to_string());
+            let observed_str = row.observed_date.map(|t| t.to_string());
 
             sqlx::query(
                 r#"
@@ -392,7 +425,10 @@ impl DatabaseService {
         Ok(())
     }
 
-    pub async fn insert_device_log_batch(&self, rows: &[PlcLogDeviceRow]) -> Result<(), sqlx::Error> {
+    pub async fn insert_device_log_batch(
+        &self,
+        rows: &[PlcLogDeviceRow],
+    ) -> Result<(), sqlx::Error> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -431,7 +467,7 @@ impl DatabaseService {
         let rows = sqlx::query(
             r#"
             WITH base AS (
-                SELECT drs.RULE_SET_NAME, dr.PRIORITY, dc.DEVICE_CONFIG_ID,
+                SELECT drs.RULE_SET_NAME, CAST(dr.PRIORITY AS INT4) AS PRIORITY, dc.DEVICE_CONFIG_ID,
                        dc.DEVICE_TYPE_ENUM_ID,
                        dc.APPROXIMATED_FUNCTION_ID,
                        COALESCE(phdev.DEVICE_NAME, dr.DEVICE_ID) AS DEVICE_NAME

@@ -20,6 +20,8 @@ pub struct AppConfig {
 
     #[allow(dead_code)]
     pub mqtt_broker_url: String,
+    pub mqtt_username: Option<String>,
+    pub mqtt_password: Option<String>,
 
     pub inbound_error_notification_enabled: bool,
     pub inbound_error_notification_threshold_seconds: u64,
@@ -73,18 +75,23 @@ impl AppConfig {
 
         let get = |key: &str, alt_env: Option<&str>, default: &str| -> String {
             if let Ok(val) = env::var(key)
-                && !val.trim().is_empty() {
-                    return val.trim().to_string();
-                }
+                && !val.trim().is_empty()
+            {
+                return val.trim().to_string();
+            }
             if let Some(alt) = alt_env
                 && let Ok(val) = env::var(alt)
-                    && !val.trim().is_empty() {
-                        return val.trim().to_string();
-                    }
-            if let Some(val) = props.get(key)
-                && !val.trim().is_empty() {
-                    return val.trim().to_string();
-                }
+                && !val.trim().is_empty()
+            {
+                return val.trim().to_string();
+            }
+            if let Some(val) = props
+                .get(key)
+                .or_else(|| alt_env.and_then(|alt| props.get(alt)))
+                && !val.trim().is_empty()
+            {
+                return val.trim().to_string();
+            }
             default.to_string()
         };
 
@@ -94,16 +101,32 @@ impl AppConfig {
             .parse::<u16>()
             .unwrap_or(8081);
 
-        let api_auth_enabled = get("GATEWAY_API_AUTH_ENABLED", Some("gateway.api.auth.enabled"), "true")
-            .parse::<bool>()
-            .unwrap_or(true);
-        let api_auth_header = get("GATEWAY_API_AUTH_HEADER", Some("gateway.api.auth.header"), "X-API-Key");
-        let api_auth_token = get("GATEWAY_API_AUTH_TOKEN", Some("gateway.api.auth.token"), "change-me-in-production");
+        let api_auth_enabled = get(
+            "GATEWAY_API_AUTH_ENABLED",
+            Some("gateway.api.auth.enabled"),
+            "true",
+        )
+        .parse::<bool>()
+        .unwrap_or(true);
+        let api_auth_header = get(
+            "GATEWAY_API_AUTH_HEADER",
+            Some("gateway.api.auth.header"),
+            "X-API-Key",
+        );
+        let api_auth_token = get(
+            "GATEWAY_API_AUTH_TOKEN",
+            Some("gateway.api.auth.token"),
+            "change-me-in-production",
+        );
 
         let gateway_device_id = get("GATEWAY_DEVICE_ID", Some("gateway.device.id"), "");
-        let startup_discovery_enabled = get("GATEWAY_STARTUP_DISCOVERY_ENABLED", Some("gateway.startup.discovery.enabled"), "true")
-            .parse::<bool>()
-            .unwrap_or(true);
+        let startup_discovery_enabled = get(
+            "GATEWAY_STARTUP_DISCOVERY_ENABLED",
+            Some("gateway.startup.discovery.enabled"),
+            "true",
+        )
+        .parse::<bool>()
+        .unwrap_or(true);
 
         let raw_db_url = get(
             "DATABASE_URL",
@@ -119,7 +142,11 @@ impl AppConfig {
         );
         let log_db_url = normalize_postgres_url(&raw_log_db_url);
 
-        let mqtt_broker_url = get("MQTT_BROKER_URL", Some("mqtt.broker.url"), "tcp://localhost:1883");
+        let mqtt_broker_url = get(
+            "MQTT_BROKER_URL",
+            Some("mqtt.broker.url"),
+            "tcp://localhost:1883",
+        );
 
         let inbound_error_notification_enabled = get(
             "GATEWAY_INBOUND_ERROR_NOTIFICATION_ENABLED",
@@ -137,49 +164,117 @@ impl AppConfig {
         .parse::<u64>()
         .unwrap_or(60);
 
-        let raw_notify_uri = get("GATEWAY_INBOUND_ERROR_NOTIFICATION_URI", Some("gateway.inbound.error.notification.uri"), "");
+        let raw_notify_uri = get(
+            "GATEWAY_INBOUND_ERROR_NOTIFICATION_URI",
+            Some("gateway.inbound.error.notification.uri"),
+            "",
+        );
         let inbound_error_notification_uri = if raw_notify_uri.is_empty() {
             None
         } else {
             Some(raw_notify_uri)
         };
 
-        let file_transfer_uri = get("FILE_TRANSFER_URI", Some("file.transfer.uri"), "target/test-recipes");
-        let file_transfer_uri_2_enabled = get("FILE_TRANSFER_URI_2_ENABLED", Some("file.transfer.uri.2.enabled"), "false")
-            .parse::<bool>()
-            .unwrap_or(false);
+        let file_transfer_uri = get(
+            "FILE_TRANSFER_URI",
+            Some("file.transfer.uri"),
+            "target/test-recipes",
+        );
+        let file_transfer_uri_2_enabled = get(
+            "FILE_TRANSFER_URI_2_ENABLED",
+            Some("file.transfer.uri.2.enabled"),
+            "false",
+        )
+        .parse::<bool>()
+        .unwrap_or(false);
         let raw_ft2 = get("FILE_TRANSFER_URI_2", Some("file.transfer.uri.2"), "");
-        let file_transfer_uri_2 = if raw_ft2.is_empty() { None } else { Some(raw_ft2) };
+        let file_transfer_uri_2 = if raw_ft2.is_empty() {
+            None
+        } else {
+            Some(raw_ft2)
+        };
 
-        let mqtt_write_after_publish_enabled = get("MQTT_WRITE_AFTER_PUBLISH_ENABLED", Some("mqtt.write.afterPublish.enabled"), "true")
-            .parse::<bool>()
-            .unwrap_or(true);
-        let raw_mqtt_after_pub = get("MQTT_WRITE_AFTER_PUBLISH_URI", Some("mqtt.write.afterPublish.uri"), "");
-        let mqtt_write_after_publish_uri = if raw_mqtt_after_pub.is_empty() { None } else { Some(raw_mqtt_after_pub) };
+        let mqtt_write_after_publish_enabled = get(
+            "MQTT_WRITE_AFTER_PUBLISH_ENABLED",
+            Some("mqtt.write.afterPublish.enabled"),
+            &env::var("MQTT_WRITE_AFTERPUBLISH_ENABLED").unwrap_or_else(|_| "true".to_string()),
+        )
+        .parse::<bool>()
+        .unwrap_or(true);
+        let raw_mqtt_after_pub = get(
+            "MQTT_WRITE_AFTER_PUBLISH_URI",
+            Some("mqtt.write.afterPublish.uri"),
+            "",
+        );
+        let mqtt_write_after_publish_uri = if raw_mqtt_after_pub.is_empty() {
+            None
+        } else {
+            Some(raw_mqtt_after_pub)
+        };
 
-        let opcua_write_after_publish_enabled = get("OPCUA_WRITE_AFTER_PUBLISH_ENABLED", Some("opcua.write.afterPublish.enabled"), "true")
-            .parse::<bool>()
-            .unwrap_or(true);
-        let raw_opcua_after_pub = get("OPCUA_WRITE_AFTER_PUBLISH_URI", Some("opcua.write.afterPublish.uri"), "");
-        let opcua_write_after_publish_uri = if raw_opcua_after_pub.is_empty() { None } else { Some(raw_opcua_after_pub) };
+        let opcua_write_after_publish_enabled = get(
+            "OPCUA_WRITE_AFTER_PUBLISH_ENABLED",
+            Some("opcua.write.afterPublish.enabled"),
+            "true",
+        )
+        .parse::<bool>()
+        .unwrap_or(true);
+        let raw_opcua_after_pub = get(
+            "OPCUA_WRITE_AFTER_PUBLISH_URI",
+            Some("opcua.write.afterPublish.uri"),
+            "",
+        );
+        let opcua_write_after_publish_uri = if raw_opcua_after_pub.is_empty() {
+            None
+        } else {
+            Some(raw_opcua_after_pub)
+        };
 
-        let mqtt_read_after_store_enabled = get("MQTT_READ_AFTER_STORE_ENABLED", Some("mqtt.read.afterStore.enabled"), "true")
-            .parse::<bool>()
-            .unwrap_or(true);
-        let raw_mqtt_after_store = get("MQTT_READ_AFTER_STORE_URI", Some("mqtt.read.afterStore.uri"), "");
-        let mqtt_read_after_store_uri = if raw_mqtt_after_store.is_empty() { None } else { Some(raw_mqtt_after_store) };
+        let mqtt_read_after_store_enabled = get(
+            "MQTT_READ_AFTER_STORE_ENABLED",
+            Some("mqtt.read.afterStore.enabled"),
+            "true",
+        )
+        .parse::<bool>()
+        .unwrap_or(true);
+        let raw_mqtt_after_store = get(
+            "MQTT_READ_AFTER_STORE_URI",
+            Some("mqtt.read.afterStore.uri"),
+            "",
+        );
+        let mqtt_read_after_store_uri = if raw_mqtt_after_store.is_empty() {
+            None
+        } else {
+            Some(raw_mqtt_after_store)
+        };
 
-        let mqtt_read_route_auto_startup = get("MQTT_READ_ROUTE_AUTO_STARTUP", Some("mqtt.read.route.autoStartup"), "true")
-            .parse::<bool>()
-            .unwrap_or(true);
+        let mqtt_read_route_auto_startup = get(
+            "MQTT_READ_ROUTE_AUTO_STARTUP",
+            Some("mqtt.read.route.autoStartup"),
+            "true",
+        )
+        .parse::<bool>()
+        .unwrap_or(true);
         let raw_mqtt_consume = get("MQTT_READ_CONSUME_URI", Some("mqtt.read.consume.uri"), "");
-        let mqtt_read_consume_uri = if raw_mqtt_consume.is_empty() { None } else { Some(raw_mqtt_consume) };
+        let mqtt_read_consume_uri = if raw_mqtt_consume.is_empty() {
+            None
+        } else {
+            Some(raw_mqtt_consume)
+        };
 
-        let plc_log_route_auto_startup = get("PLC_LOG_ROUTE_AUTO_STARTUP", Some("plc.log.route.autoStartup"), "false")
-            .parse::<bool>()
-            .unwrap_or(false);
+        let plc_log_route_auto_startup = get(
+            "PLC_LOG_ROUTE_AUTO_STARTUP",
+            Some("plc.log.route.autoStartup"),
+            "false",
+        )
+        .parse::<bool>()
+        .unwrap_or(false);
         let raw_plc_consume = get("PLC_LOG_CONSUME_URI", Some("plc.log.consume.uri"), "");
-        let plc_log_consume_uri = if raw_plc_consume.is_empty() { None } else { Some(raw_plc_consume) };
+        let plc_log_consume_uri = if raw_plc_consume.is_empty() {
+            None
+        } else {
+            Some(raw_plc_consume)
+        };
 
         Self {
             http_host,
@@ -193,6 +288,8 @@ impl AppConfig {
             db_url,
             log_db_url,
             mqtt_broker_url,
+            mqtt_username: env::var("MQTT_USERNAME").ok(),
+            mqtt_password: env::var("MQTT_PASSWORD").ok(),
             inbound_error_notification_enabled,
             inbound_error_notification_threshold_seconds,
             inbound_error_notification_uri,
@@ -213,7 +310,10 @@ impl AppConfig {
     }
 
     pub fn is_safe_dev_profile(&self) -> bool {
-        matches!(self.profile.as_str(), "dev" | "test" | "local" | "integration")
+        matches!(
+            self.profile.as_str(),
+            "dev" | "test" | "local" | "integration"
+        )
     }
 
     pub fn validate_security(&self) -> Result<(), String> {
@@ -224,7 +324,10 @@ impl AppConfig {
             || self.api_auth_token == "change-me"
             || self.api_auth_token == "change-me-in-production"
         {
-            return Err("Unsafe gateway API token. Set GATEWAY_API_AUTH_TOKEN to a real secret.".to_string());
+            return Err(
+                "Unsafe gateway API token. Set GATEWAY_API_AUTH_TOKEN to a real secret."
+                    .to_string(),
+            );
         }
         Ok(())
     }

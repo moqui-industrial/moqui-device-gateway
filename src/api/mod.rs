@@ -1,18 +1,17 @@
 use crate::config::AppConfig;
 use crate::export::RecipeExporter;
-use crate::protocols::FileTransferService;
+use crate::protocols::{FileTransferService, MqttService};
 use crate::supervisor::SubscriptionManager;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::json;
-use tracing::warn;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,9 +20,16 @@ pub struct AppState {
 
 pub fn create_router(state: AppState) -> Router {
     Router::new()
-        .route("/api/device-request/run/{request_name}", post(run_device_request))
-        .route("/api/device-content/transfer/{request_name}", post(transfer_device_content))
+        .route(
+            "/api/device-request/run/{request_name}",
+            post(run_device_request),
+        )
+        .route(
+            "/api/device-content/transfer/{request_name}",
+            post(transfer_device_content),
+        )
         .route("/api/device-config/export", post(export_device_config))
+        .route("/api/trajectory/export", post(export_trajectory))
         .route("/q/health", get(health_check))
         .route("/q/health/ready", get(health_check))
         .route("/q/health/live", get(health_live))
@@ -31,7 +37,10 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-fn authorize(headers: &HeaderMap, config: &AppConfig) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn authorize(
+    headers: &HeaderMap,
+    config: &AppConfig,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if !config.api_auth_enabled || config.is_safe_dev_profile() {
         return Ok(());
     }
@@ -79,29 +88,20 @@ async fn run_device_request(
         }
     };
 
-    if let Some(dev_id) = &context.device_id {
-        let gw_id = &state.manager.config().gateway_device_id;
-        if !gw_id.is_empty() {
-            match state.manager.db().assert_gateway_scope(gw_id, dev_id).await {
-                Ok(true) => {}
-                Ok(false) => {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(json!({
-                            "error": "forbidden",
-                            "message": format!("DeviceRequest {} belongs to device {}, which is not in the scope of gateway {}.", request_name, dev_id, gw_id)
-                        })),
-                    )
-                        .into_response();
-                }
-                Err(e) => {
-                    return (
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        Json(json!({"error": "service_unavailable", "message": e.to_string()})),
-                    )
-                        .into_response();
-                }
-            }
+    if let Err(response) = require_scope(&state, context.device_id.as_deref()).await {
+        return response.into_response();
+    }
+    if let Some(parent) = context
+        .parent_request_name
+        .as_deref()
+        .filter(|_| context.request_type_enum_id == "DrtUnsubscribe")
+    {
+        let target = match state.manager.db().load_request_context(parent).await {
+            Ok(target) => target,
+            Err(_) => return api_error(StatusCode::BAD_REQUEST, "Unknown subscription parent"),
+        };
+        if let Err(response) = require_scope(&state, target.device_id.as_deref()).await {
+            return response.into_response();
         }
     }
 
@@ -154,6 +154,13 @@ async fn transfer_device_content(
         }
     };
 
+    if let Err(response) = require_scope(&state, context.device_id.as_deref()).await {
+        return response.into_response();
+    }
+    if let Err(message) = FileTransferService::validate_filename(&filename) {
+        return api_error(StatusCode::BAD_REQUEST, &message);
+    }
+
     let broker_uri = match &context.broker_uri {
         Some(u) if !u.trim().is_empty() => u.clone(),
         _ => {
@@ -184,7 +191,7 @@ async fn transfer_device_content(
                 "requestName": request_name,
                 "filename": filename,
                 "bytes": file_bytes.len(),
-                "transferUri": broker_uri
+                "transferUri": "configured destination"
             })),
         )
             .into_response(),
@@ -226,10 +233,31 @@ async fn export_device_config(
         }
     };
 
+    // Check every selected rule before generating or transferring any file.
+    let targets: Vec<String> = match sqlx::query_scalar(
+        "SELECT DISTINCT DEVICE_ID FROM DEVICE_RULE WHERE DEVICE_RULE_SET_ID=$1 AND ($2::varchar IS NULL OR DEVICE_ID=$2) AND ($3::varchar IS NULL OR DEVICE_RULE_ID=$3)")
+        .bind(&rule_set_id).bind(&body.device_id).bind(&body.device_rule_id)
+        .fetch_all(&state.manager.db().moqui_pool).await {
+        Ok(targets) => targets,
+        Err(_) => return api_error(StatusCode::SERVICE_UNAVAILABLE, "Unable to load recipe scope"),
+    };
+    if targets.is_empty() {
+        return api_error(StatusCode::NOT_FOUND, "No matching device rules");
+    }
+    for device in &targets {
+        if let Err(response) = require_scope(&state, Some(device)).await {
+            return response.into_response();
+        }
+    }
+
     let rows = match state
         .manager
         .db()
-        .export_device_config(&rule_set_id, body.device_id.as_deref(), body.device_rule_id.as_deref())
+        .export_device_config(
+            &rule_set_id,
+            body.device_id.as_deref(),
+            body.device_rule_id.as_deref(),
+        )
         .await
     {
         Ok(r) => r,
@@ -247,13 +275,29 @@ async fn export_device_config(
 
     let mut transfer_summaries = Vec::new();
     for file_spec in &files {
-        if let Err(e) = FileTransferService::transfer_text(dest_uri, &file_spec.filename, &file_spec.content).await {
-            warn!("Failed to transfer recipe file {}: {}", file_spec.filename, e);
+        if let Err(e) =
+            FileTransferService::transfer_text(dest_uri, &file_spec.filename, &file_spec.content)
+                .await
+        {
+            return api_error(
+                StatusCode::BAD_GATEWAY,
+                &format!("Recipe transfer failed for {}: {}", file_spec.filename, e),
+            );
         }
         if state.manager.config().file_transfer_uri_2_enabled
-            && let Some(dest2) = &state.manager.config().file_transfer_uri_2 {
-                let _ = FileTransferService::transfer_text(dest2, &file_spec.filename, &file_spec.content).await;
-            }
+            && let Some(dest2) = &state.manager.config().file_transfer_uri_2
+            && let Err(e) =
+                FileTransferService::transfer_text(dest2, &file_spec.filename, &file_spec.content)
+                    .await
+        {
+            return api_error(
+                StatusCode::BAD_GATEWAY,
+                &format!(
+                    "Secondary recipe transfer failed for {}: {}",
+                    file_spec.filename, e
+                ),
+            );
+        }
         transfer_summaries.push(json!({
             "filename": file_spec.filename,
             "priority": file_spec.priority,
@@ -270,6 +314,112 @@ async fn export_device_config(
         })),
     )
         .into_response()
+}
+
+fn api_error(code: StatusCode, message: &str) -> axum::response::Response {
+    (code, Json(json!({"error": message}))).into_response()
+}
+
+fn scope_error(code: StatusCode, message: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (code, Json(json!({"error":message})))
+}
+
+async fn require_scope(
+    state: &AppState,
+    device: Option<&str>,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let gateway = &state.manager.config().gateway_device_id;
+    let Some(device) = device.filter(|d| !d.is_empty()) else {
+        return Err(scope_error(
+            StatusCode::FORBIDDEN,
+            "A scoped target device is required",
+        ));
+    };
+    if gateway.is_empty() {
+        return Err(scope_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Gateway identity is not configured",
+        ));
+    }
+    match state
+        .manager
+        .db()
+        .assert_gateway_scope(gateway, device)
+        .await
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(scope_error(
+            StatusCode::FORBIDDEN,
+            "Target device is outside gateway scope",
+        )),
+        Err(_) => Err(scope_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Unable to validate gateway scope",
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+struct TrajectoryBody {
+    #[serde(rename = "requestName")]
+    request_name: String,
+    #[serde(rename = "approximatedFunctionId")]
+    approximated_function_id: String,
+    #[serde(rename = "waypointCount")]
+    waypoint_count: usize,
+    #[serde(rename = "mqttTopic")]
+    mqtt_topic: String,
+    axes: std::collections::BTreeMap<String, Vec<f64>>,
+}
+
+async fn export_trajectory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<TrajectoryBody>,
+) -> axum::response::Response {
+    if let Err(err) = authorize(&headers, state.manager.config()) {
+        return err.into_response();
+    }
+    let request = match state
+        .manager
+        .db()
+        .load_request_context(&body.request_name)
+        .await
+    {
+        Ok(request) => request,
+        Err(_) => {
+            return api_error(
+                StatusCode::NOT_FOUND,
+                "Trajectory dispatch request not found",
+            );
+        }
+    };
+    if let Err(response) = require_scope(&state, request.device_id.as_deref()).await {
+        return response.into_response();
+    }
+    if request.request_query.as_deref() != Some(body.mqtt_topic.as_str()) {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "Trajectory topic must match the modeled request query",
+        );
+    }
+    if body.waypoint_count == 0
+        || body.axes.is_empty()
+        || body
+            .axes
+            .values()
+            .any(|v| v.len() != body.waypoint_count || v.iter().any(|n| !n.is_finite()))
+    {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "Every trajectory axis must contain waypointCount finite values",
+        );
+    }
+    let payload = json!({"approximatedFunctionId":body.approximated_function_id, "waypointCount":body.waypoint_count, "mqttTopic":body.mqtt_topic,"axes":body.axes});
+    match MqttService::publish_json(state.manager.config(), &body.mqtt_topic, &payload).await {
+        Ok(()) => (StatusCode::OK, Json(json!({"status":"completed","rowCount":body.waypoint_count,"routeId":"trajectory-export"}))).into_response(),
+        Err(error) => api_error(StatusCode::BAD_GATEWAY, &error),
+    }
 }
 
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
@@ -298,7 +448,7 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
                 "status": status_str,
                 "data": {
                     "gatewayDeviceId": gw_id,
-                    "datasource": "UP",
+                    "datasource": if identity_status.is_some() { "UP" } else { "DOWN" },
                     "gatewayConfigured": identity_status.as_ref().map(|s| s.configured.0).unwrap_or(false),
                     "physicalDeviceExists": identity_status.as_ref().map(|s| s.physical_device_exists).unwrap_or(false),
                     "gatewayMembershipValid": identity_status.as_ref().map(|s| s.gateway_member_found).unwrap_or(false),

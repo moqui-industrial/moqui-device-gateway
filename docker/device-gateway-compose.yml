@@ -6,10 +6,6 @@
 # From the repository root, build and start the gateway:
 #   docker compose -f docker/device-gateway-compose.yml -p moqui-gateway up -d --build
 #
-# Optional native build:
-#   DEVICE_GATEWAY_DOCKERFILE=src/main/docker/Dockerfile.graalvm \
-#   docker compose -f docker/device-gateway-compose.yml -p moqui-gateway up -d --build
-#
 # Health check:
 #   curl http://localhost:8081/q/health/ready
 
@@ -29,8 +25,9 @@ services:
       - GATEWAY_DEVICE_ID=${GATEWAY_DEVICE_ID:-GW_EDGE_01}
       - DATABASE_URL=postgres://moqui:moqui@moqui-database:5432/moqui
       - LOG_DATABASE_URL=postgres://moqui:moqui@moqui-database:5432/moqui
-      - GATEWAY_API_AUTH_TOKEN=${GATEWAY_API_AUTH_TOKEN:-change-me}
-      - MQTT_READ_CONSUME_URI=seda:mqtt-read-device-request-in
+      - GATEWAY_API_AUTH_TOKEN=${GATEWAY_API_AUTH_TOKEN:?Set a non-default gateway API token}
+      - MQTT_USERNAME=${MQTT_USERNAME:-artemis}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-artemis}
     extra_hosts:
       - host.docker.internal:host-gateway
     volumes:

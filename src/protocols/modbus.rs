@@ -1,8 +1,8 @@
 use crate::db::DatabaseService;
 use crate::model::{InboundRow, RequestContext};
 use crate::pipeline::InboundErrorNotifier;
+use rustls_pki_types::{CertificateDer, pem::PemObject};
 use serde_json::json;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_modbus::client::Context;
@@ -26,31 +26,40 @@ impl ModbusService {
                 )
             })?;
 
-        let clean_addr = transport
-            .strip_prefix("modbus://")
-            .or_else(|| transport.strip_prefix("modbus.tcp://"))
-            .unwrap_or(transport);
-
         let is_tls = context.transport_enum_code.as_deref() == Some("tls")
             || context.transport_enum_id.as_deref() == Some("DctrTls")
             || transport.starts_with("modbus.tls://");
-
-        let socket_addr: SocketAddr = clean_addr
-            .parse()
-            .map_err(|e| format!("Invalid Modbus socket address {}: {}", clean_addr, e))?;
+        let clean_addr = transport
+            .strip_prefix("modbus://")
+            .or_else(|| transport.strip_prefix("modbus.tcp://"))
+            .or_else(|| transport.strip_prefix("modbus.tls://"))
+            .unwrap_or(transport);
+        let url = reqwest::Url::parse(&format!("tcp://{clean_addr}"))
+            .map_err(|_| "Invalid Modbus endpoint".to_string())?;
+        let host = url.host_str().ok_or("Missing Modbus host")?;
+        let port = url.port().unwrap_or(if is_tls { 802 } else { 502 });
+        let tcp_stream = tokio::net::TcpStream::connect((host, port))
+            .await
+            .map_err(|e| format!("Modbus TCP connection failed: {e}"))?;
 
         if is_tls {
-            let tcp_stream = tokio::net::TcpStream::connect(&socket_addr)
-                .await
-                .map_err(|e| format!("Modbus TCP connect error to {}: {}", socket_addr, e))?;
-
-            let root_store = rustls::RootCertStore::empty();
+            let path = std::env::var("MODBUS_TLS_CA_FILE")
+                .map_err(|_| "Set MODBUS_TLS_CA_FILE to the trusted CA PEM bundle")?;
+            let mut root_store = rustls::RootCertStore::empty();
+            for certificate in CertificateDer::pem_file_iter(path).map_err(|e| e.to_string())? {
+                root_store
+                    .add(certificate.map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            }
+            if root_store.is_empty() {
+                return Err("Modbus TLS CA bundle has no certificates".into());
+            }
             let client_config = rustls::ClientConfig::builder()
                 .with_root_certificates(root_store)
                 .with_no_client_auth();
 
             let connector = tokio_rustls::TlsConnector::from(Arc::new(client_config));
-            let domain = rustls_pki_types::ServerName::try_from("modbus-device.local")
+            let domain = rustls_pki_types::ServerName::try_from(host)
                 .map_err(|e| format!("Invalid TLS server name: {:?}", e))?
                 .to_owned();
 
@@ -63,16 +72,35 @@ impl ModbusService {
 
             Ok(client_ctx)
         } else {
-            let client_ctx = tokio_modbus::client::tcp::connect(socket_addr)
-                .await
-                .map_err(|e| format!("Failed to connect to Modbus TCP at {}: {}", socket_addr, e))?;
+            let client_ctx = tokio_modbus::client::tcp::attach(tcp_stream);
 
             Ok(client_ctx)
         }
     }
 
-    /// Executes Modbus one-shot read
     pub async fn run_read(
+        context: &RequestContext,
+        db: &DatabaseService,
+    ) -> Result<serde_json::Value, String> {
+        tokio::time::timeout(
+            Duration::from_secs(context.timeout.unwrap_or(30).max(1) as u64),
+            Self::run_read_inner(context, db),
+        )
+        .await
+        .map_err(|_| "Modbus read timed out".to_string())?
+    }
+
+    pub async fn run_write(context: &RequestContext) -> Result<serde_json::Value, String> {
+        tokio::time::timeout(
+            Duration::from_secs(context.timeout.unwrap_or(30).max(1) as u64),
+            Self::run_write_inner(context),
+        )
+        .await
+        .map_err(|_| "Modbus write timed out".to_string())?
+    }
+
+    /// Executes Modbus one-shot read
+    async fn run_read_inner(
         context: &RequestContext,
         db: &DatabaseService,
     ) -> Result<serde_json::Value, String> {
@@ -163,7 +191,7 @@ impl ModbusService {
     }
 
     /// Executes Modbus write (DrtWrite / DrtConfigWrite)
-    pub async fn run_write(context: &RequestContext) -> Result<serde_json::Value, String> {
+    async fn run_write_inner(context: &RequestContext) -> Result<serde_json::Value, String> {
         let mut client = Self::connect(context).await?;
 
         for item in &context.items {
@@ -179,7 +207,17 @@ impl ModbusService {
                 })?;
 
             let (reg_type, addr) = parse_modbus_target(query)?;
-            let num = item.numeric_value.unwrap_or(0.0);
+            let num = match (item.numeric_value, item.symbolic_value.as_deref()) {
+                (Some(number), _) if number.is_finite() => number,
+                (None, Some("Y" | "true" | "TRUE")) => 1.0,
+                (None, Some("N" | "false" | "FALSE")) => 0.0,
+                _ => return Err("Missing or invalid Modbus write value".into()),
+            };
+            if matches!(reg_type, ModbusTargetType::Holding)
+                && (!(0.0..=65535.0).contains(&num) || num.fract() != 0.0)
+            {
+                return Err("Modbus holding register requires an integer from 0 to 65535".into());
+            }
 
             match reg_type {
                 ModbusTargetType::Holding => {
@@ -217,8 +255,12 @@ impl ModbusService {
         notifier: InboundErrorNotifier,
         cancel_token: CancellationToken,
     ) -> Result<(), String> {
-        let polling_interval = Duration::from_millis(context.polling_interval.unwrap_or(200) as u64);
-        info!("Starting cyclic Modbus task for route {} with interval {:?}", route_id, polling_interval);
+        let polling_interval =
+            Duration::from_millis(context.polling_interval.unwrap_or(200).max(1) as u64);
+        info!(
+            "Starting cyclic Modbus task for route {} with interval {:?}",
+            route_id, polling_interval
+        );
 
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(polling_interval);

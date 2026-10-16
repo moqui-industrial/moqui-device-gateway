@@ -66,28 +66,33 @@ pub struct RequestContext {
 impl RequestContext {
     pub fn is_opcua(&self) -> bool {
         if let Some(driver) = &self.driver_enum_id
-            && driver == "DcdOpcUa" {
-                return true;
-            }
+            && driver == "DcdOpcUa"
+        {
+            return true;
+        }
         if let Some(broker) = &self.broker_uri
             && (broker.starts_with("opcua:")
                 || broker.starts_with("milo-client:")
                 || broker.starts_with("opc.tcp://"))
-            {
-                return true;
-            }
+        {
+            return true;
+        }
         false
     }
 
     pub fn is_modbus(&self) -> bool {
         if let Some(driver) = &self.driver_enum_id
-            && driver == "DcdModbus" {
-                return true;
-            }
+            && matches!(driver.as_str(), "DcdModbus" | "DcdModbusTCP")
+        {
+            return true;
+        }
         if let Some(broker) = &self.broker_uri
-            && (broker.starts_with("modbus:") || broker.starts_with("modbus.tcp://")) {
-                return true;
-            }
+            && (broker.starts_with("modbus:")
+                || broker.starts_with("modbus.tcp://")
+                || broker.starts_with("modbus.tls://"))
+        {
+            return true;
+        }
         false
     }
 

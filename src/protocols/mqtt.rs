@@ -2,7 +2,9 @@ use crate::config::AppConfig;
 use crate::db::DatabaseService;
 use crate::model::{RequestContext, RequestItem};
 use crate::pipeline::{InboundErrorNotifier, Normalizer};
-use rumqttc::{AsyncClient, MqttOptions, QoS};
+use rumqttc::v5::mqttbytes::{QoS, v5::Packet};
+use rumqttc::v5::{AsyncClient, Event, MqttOptions};
+use rumqttc::{Outgoing, Transport};
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -17,65 +19,51 @@ impl MqttService {
         context: &RequestContext,
         config: &AppConfig,
     ) -> Result<serde_json::Value, String> {
-        let broker_uri = context
-            .broker_uri
-            .as_deref()
-            .ok_or_else(|| format!("DeviceRequest {} does not define brokerUri.", context.request_name))?;
+        let broker_uri = context.broker_uri.as_deref().ok_or_else(|| {
+            format!(
+                "DeviceRequest {} does not define brokerUri.",
+                context.request_name
+            )
+        })?;
 
-        let (mut options, topic_override) = parse_mqtt_uri(broker_uri, "moqui-gw-write")?;
-        options.set_keep_alive(Duration::from_secs(10));
-
-        let (client, mut eventloop) = AsyncClient::new(options, 10);
-        let event_handle = tokio::spawn(async move {
-            while let Ok(event) = eventloop.poll().await {
-                debug!("MQTT write event: {:?}", event);
-            }
-        });
-
-        let mut publish_uri_list = Vec::new();
+        let endpoint = parse_mqtt_uri(
+            broker_uri,
+            &format!("moqui-gw-write-{}", uuid::Uuid::new_v4()),
+            config,
+        )?;
+        let mut messages = Vec::new();
         for item in &context.items {
             let topic = item
                 .target_query
                 .as_deref()
                 .or(context.request_query.as_deref())
-                .or(topic_override.as_deref())
+                .or(endpoint.topic.as_deref())
+                .filter(|t| !t.is_empty())
                 .ok_or_else(|| {
-                    format!(
-                        "Missing topic query for request {} item {}",
-                        context.request_name, item.parameter_id
-                    )
+                    format!("Missing MQTT topic for request {}", context.request_name)
                 })?;
-
-            let payload = build_mqtt_payload(item)?;
-            let payload_bytes = serde_json::to_vec(&payload)
-                .map_err(|e| format!("Failed to serialize MQTT payload: {}", e))?;
-
-            client
-                .publish(topic, QoS::AtLeastOnce, false, payload_bytes)
-                .await
-                .map_err(|e| format!("MQTT publish to {} failed: {}", topic, e))?;
-
-            publish_uri_list.push(format!("{}/{}", broker_uri, topic));
+            let payload =
+                serde_json::to_vec(&build_mqtt_payload(item)?).map_err(|e| e.to_string())?;
+            messages.push((topic.to_string(), payload));
         }
-
-        drop(client);
-        let _ = tokio::time::timeout(Duration::from_millis(500), event_handle).await;
+        let publish_uri_list = Self::publish_messages(endpoint, messages, context.timeout).await?;
 
         if config.mqtt_write_after_publish_enabled
-            && let Some(uri) = &config.mqtt_write_after_publish_uri {
-                send_callback(
-                    uri,
-                    "writeCompleted",
-                    &context.request_name,
-                    context.device_id.as_deref(),
-                    "completed",
-                    "MQTT",
-                    "mqtt-write-device-request",
-                    context.items.len(),
-                    &publish_uri_list,
-                )
-                .await;
-            }
+            && let Some(uri) = &config.mqtt_write_after_publish_uri
+        {
+            send_callback(
+                uri,
+                "writeCompleted",
+                &context.request_name,
+                context.device_id.as_deref(),
+                "completed",
+                "MQTT",
+                "mqtt-write-device-request",
+                context.items.len(),
+                &publish_uri_list,
+            )
+            .await;
+        }
 
         Ok(json!({
             "status": "completed",
@@ -95,10 +83,12 @@ impl MqttService {
         config: AppConfig,
         cancel_token: CancellationToken,
     ) -> Result<(), String> {
-        let broker_uri = context
-            .broker_uri
-            .as_deref()
-            .ok_or_else(|| format!("DeviceRequest {} does not define brokerUri.", context.request_name))?;
+        let broker_uri = context.broker_uri.as_deref().ok_or_else(|| {
+            format!(
+                "DeviceRequest {} does not define brokerUri.",
+                context.request_name
+            )
+        })?;
 
         let client_id = format!(
             "moqui-gw-{}-{}-{}",
@@ -107,18 +97,21 @@ impl MqttService {
             safe_part(&topic)
         );
 
-        let (mut options, _) = parse_mqtt_uri(broker_uri, &client_id)?;
-        options.set_clean_session(false);
+        let endpoint = parse_mqtt_uri(broker_uri, &client_id, &config)?;
+        let mut options = endpoint.options;
         options.set_keep_alive(Duration::from_secs(30));
 
         let (client, mut eventloop) = AsyncClient::new(options, 50);
 
         client
-            .subscribe(&topic, QoS::AtLeastOnce)
+            .subscribe(&topic, endpoint.qos)
             .await
             .map_err(|e| format!("Failed to subscribe to MQTT topic {}: {}", topic, e))?;
 
-        info!("MQTT subscriber started for route {} on topic {}", route_id, topic);
+        info!(
+            "MQTT subscriber started for route {} on topic {}",
+            route_id, topic
+        );
 
         let route_clone = route_id.clone();
         let context_clone = context.clone();
@@ -129,20 +122,28 @@ impl MqttService {
                     _ = cancel_token.cancelled() => {
                         info!("MQTT subscriber cancelled for route {}", route_clone);
                         let _ = client.unsubscribe(&topic).await;
+                        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                            while let Ok(event) = eventloop.poll().await {
+                                if matches!(event, Event::Incoming(Packet::UnsubAck(_))) { break; }
+                            }
+                        }).await;
+                        let _ = client.disconnect().await;
+                        let _ = tokio::time::timeout(Duration::from_millis(200), eventloop.poll()).await;
                         break;
                     }
                     notification = eventloop.poll() => {
                         match notification {
-                            Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
+                            Ok(Event::Incoming(Packet::Publish(publish))) => {
+                                let incoming_topic = String::from_utf8_lossy(&publish.topic).into_owned();
                                 let payload_str = match std::str::from_utf8(&publish.payload) {
                                     Ok(s) => s,
                                     Err(e) => {
-                                        warn!("Non-UTF8 MQTT payload on topic {}: {}", publish.topic, e);
+                                        warn!("Non-UTF8 MQTT payload on topic {}: {}", incoming_topic, e);
                                         continue;
                                     }
                                 };
 
-                                let rows = Normalizer::normalize_inbound_payload(&context_clone, &publish.topic, payload_str);
+                                let rows = Normalizer::normalize_inbound_payload(&context_clone, &incoming_topic, payload_str);
                                 if rows.is_empty() {
                                     continue;
                                 }
@@ -169,7 +170,7 @@ impl MqttService {
                                                     "MQTT",
                                                     &route_clone,
                                                     rows.len(),
-                                                    std::slice::from_ref(&publish.topic),
+                                                    std::slice::from_ref(&incoming_topic),
                                                 ).await;
                                             }
                                     }
@@ -177,6 +178,11 @@ impl MqttService {
                                         warn!("DB persistence failed for MQTT route {}: {}", route_clone, e);
                                         notifier.record_error(&route_clone, Some(&context_clone.request_name), "MQTT", &e.to_string()).await;
                                     }
+                                }
+                            }
+                            Ok(Event::Incoming(Packet::ConnAck(ack))) => {
+                                if !ack.session_present {
+                                    let _ = client.subscribe(&topic, endpoint.qos).await;
                                 }
                             }
                             Ok(_) => {}
@@ -203,10 +209,12 @@ impl MqttService {
         config: AppConfig,
         cancel_token: CancellationToken,
     ) -> Result<(), String> {
-        let broker_uri = context
-            .broker_uri
-            .as_deref()
-            .ok_or_else(|| format!("DeviceRequest {} does not define brokerUri.", context.request_name))?;
+        let broker_uri = context.broker_uri.as_deref().ok_or_else(|| {
+            format!(
+                "DeviceRequest {} does not define brokerUri.",
+                context.request_name
+            )
+        })?;
 
         let client_id = format!(
             "moqui-gw-plc-{}-{}",
@@ -214,18 +222,21 @@ impl MqttService {
             safe_part(&context.request_name)
         );
 
-        let (mut options, _) = parse_mqtt_uri(broker_uri, &client_id)?;
-        options.set_clean_session(false);
+        let endpoint = parse_mqtt_uri(broker_uri, &client_id, &config)?;
+        let mut options = endpoint.options;
         options.set_keep_alive(Duration::from_secs(30));
 
         let (client, mut eventloop) = AsyncClient::new(options, 50);
 
         client
-            .subscribe(&topic, QoS::AtLeastOnce)
+            .subscribe(&topic, endpoint.qos)
             .await
             .map_err(|e| format!("Failed to subscribe to PLC log topic {}: {}", topic, e))?;
 
-        info!("PLC log subscriber started for route {} on topic {}", route_id, topic);
+        info!(
+            "PLC log subscriber started for route {} on topic {}",
+            route_id, topic
+        );
 
         let route_clone = route_id.clone();
         let context_clone = context.clone();
@@ -236,15 +247,23 @@ impl MqttService {
                     _ = cancel_token.cancelled() => {
                         info!("PLC log subscriber cancelled for route {}", route_clone);
                         let _ = client.unsubscribe(&topic).await;
+                        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                            while let Ok(event) = eventloop.poll().await {
+                                if matches!(event, Event::Incoming(Packet::UnsubAck(_))) { break; }
+                            }
+                        }).await;
+                        let _ = client.disconnect().await;
+                        let _ = tokio::time::timeout(Duration::from_millis(200), eventloop.poll()).await;
                         break;
                     }
                     notification = eventloop.poll() => {
                         match notification {
-                            Ok(rumqttc::Event::Incoming(rumqttc::Packet::Publish(publish))) => {
+                            Ok(Event::Incoming(Packet::Publish(publish))) => {
+                                let incoming_topic = String::from_utf8_lossy(&publish.topic).into_owned();
                                 let payload_str = match std::str::from_utf8(&publish.payload) {
                                     Ok(s) => s,
                                     Err(e) => {
-                                        warn!("Non-UTF8 PLC log payload on topic {}: {}", publish.topic, e);
+                                        warn!("Non-UTF8 PLC log payload on topic {}: {}", incoming_topic, e);
                                         continue;
                                     }
                                 };
@@ -274,6 +293,11 @@ impl MqttService {
                                     }
                                 }
                             }
+                            Ok(Event::Incoming(Packet::ConnAck(ack))) => {
+                                if !ack.session_present {
+                                    let _ = client.subscribe(&topic, endpoint.qos).await;
+                                }
+                            }
                             Ok(_) => {}
                             Err(e) => {
                                 warn!("MQTT PLC log error for route {}: {}", route_clone, e);
@@ -289,7 +313,9 @@ impl MqttService {
     }
 }
 
-fn build_mqtt_payload(item: &RequestItem) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+fn build_mqtt_payload(
+    item: &RequestItem,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     let mut map = serde_json::Map::new();
     map.insert("parameterId".to_string(), json!(item.parameter_id));
 
@@ -325,64 +351,190 @@ fn build_mqtt_payload(item: &RequestItem) -> Result<serde_json::Map<String, serd
     Ok(map)
 }
 
-fn parse_mqtt_uri(uri: &str, default_client_id: &str) -> Result<(MqttOptions, Option<String>), String> {
-    // Expected formats:
-    // tcp://host:port
-    // paho-mqtt5:topic?brokerUrl=tcp://host:port&clientId=...
-    let (broker_part, topic_part, query_part) = if let Some(after) = uri.strip_prefix("paho-mqtt5:") {
-        if let Some((top, q)) = after.split_once('?') {
-            ("", Some(top.to_string()), q)
-        } else {
-            ("", Some(after.to_string()), "")
-        }
+struct MqttEndpoint {
+    options: MqttOptions,
+    topic: Option<String>,
+    qos: QoS,
+    retain: bool,
+    public_uri: String,
+}
+
+fn parse_mqtt_uri(
+    uri: &str,
+    default_client_id: &str,
+    config: &AppConfig,
+) -> Result<MqttEndpoint, String> {
+    let (broker_part, topic, query) = if let Some(rest) = uri.strip_prefix("paho-mqtt5:") {
+        let (topic, query) = rest.split_once('?').unwrap_or((rest, ""));
+        ("", Some(topic.to_string()).filter(|t| !t.is_empty()), query)
     } else {
-        let (main, q) = uri.split_once('?').unwrap_or((uri, ""));
-        (main, None, q)
+        let (broker, query) = uri.split_once('?').unwrap_or((uri, ""));
+        (broker, None, query)
     };
-
-    let mut query_params = HashMap::new();
-    for pair in query_part.split('&') {
-        if let Some((k, v)) = pair.split_once('=') {
-            query_params.insert(k, v);
-        }
-    }
-
-    let broker_url = if !broker_part.is_empty() {
+    let params: HashMap<String, String> = reqwest::Url::parse(&format!("http://options/?{query}"))
+        .map_err(|_| "Invalid MQTT options".to_string())?
+        .query_pairs()
+        .into_owned()
+        .collect();
+    let broker = if broker_part.is_empty() {
+        params
+            .get("brokerUrl")
+            .map(String::as_str)
+            .unwrap_or(&config.mqtt_broker_url)
+    } else {
         broker_part
-    } else if let Some(bu) = query_params.get("brokerUrl") {
-        *bu
-    } else {
-        "tcp://localhost:1883"
     };
-
-    let client_id = query_params
-        .get("clientId")
+    let url = reqwest::Url::parse(broker).map_err(|_| "Invalid MQTT broker URL".to_string())?;
+    let tls = matches!(url.scheme(), "ssl" | "mqtts" | "tls");
+    if !tls && !matches!(url.scheme(), "tcp" | "mqtt") {
+        return Err("Unsupported MQTT broker scheme".into());
+    }
+    let host = url.host_str().ok_or("Missing MQTT broker host")?;
+    let port = url.port().unwrap_or(if tls { 8883 } else { 1883 });
+    let mut options = MqttOptions::new(
+        params
+            .get("clientId")
+            .map(String::as_str)
+            .unwrap_or(default_client_id),
+        host,
+        port,
+    );
+    options.set_keep_alive(Duration::from_secs(30));
+    if tls {
+        options.set_transport(Transport::tls_with_default_config());
+    }
+    let clean_start = params
+        .get("cleanStart")
+        .map(|v| v.parse::<bool>())
+        .transpose()
+        .map_err(|_| "Invalid cleanStart".to_string())?
+        .unwrap_or(false);
+    options.set_clean_start(clean_start);
+    let expiry = params
+        .get("sessionExpiryInterval")
+        .map(|v| v.parse::<u32>())
+        .transpose()
+        .map_err(|_| "Invalid sessionExpiryInterval".to_string())?
+        .unwrap_or(86400);
+    options.set_session_expiry_interval(Some(expiry));
+    let username = params
+        .get("userName")
         .cloned()
-        .unwrap_or(default_client_id);
-
-    let clean_url = broker_url
-        .strip_prefix("tcp://")
-        .or_else(|| broker_url.strip_prefix("mqtt://"))
-        .unwrap_or(broker_url);
-
-    let (host, port) = if let Some((h, p)) = clean_url.split_once(':') {
-        (h, p.parse::<u16>().unwrap_or(1883))
-    } else {
-        (clean_url, 1883)
+        .or_else(|| config.mqtt_username.clone());
+    let password = params
+        .get("password")
+        .cloned()
+        .or_else(|| config.mqtt_password.clone());
+    if let Some(username) = username {
+        options.set_credentials(username, password.unwrap_or_default());
+    }
+    let qos = match params.get("qos").map(String::as_str).unwrap_or("1") {
+        "0" => QoS::AtMostOnce,
+        "1" => QoS::AtLeastOnce,
+        "2" => QoS::ExactlyOnce,
+        _ => return Err("MQTT qos must be 0, 1 or 2".into()),
     };
+    let retain = params
+        .get("retained")
+        .or_else(|| params.get("retain"))
+        .map(|v| v.parse::<bool>())
+        .transpose()
+        .map_err(|_| "Invalid MQTT retained flag".to_string())?
+        .unwrap_or(false);
+    // Never return the original URI: its query or userinfo can contain credentials.
+    let public_uri = format!("{}://{}:{}", url.scheme(), host, port);
+    Ok(MqttEndpoint {
+        options,
+        topic,
+        qos,
+        retain,
+        public_uri,
+    })
+}
 
-    let mut options = MqttOptions::new(client_id, host, port);
-
-    if let (Some(u), Some(p)) = (query_params.get("userName"), query_params.get("password")) {
-        options.set_credentials(*u, *p);
+impl MqttService {
+    async fn publish_messages(
+        endpoint: MqttEndpoint,
+        messages: Vec<(String, Vec<u8>)>,
+        timeout: Option<i32>,
+    ) -> Result<Vec<String>, String> {
+        let (client, mut eventloop) = AsyncClient::new(endpoint.options, 10);
+        let operation = async {
+            let mut uris = Vec::new();
+            for (topic, payload) in messages {
+                client
+                    .publish(&topic, endpoint.qos, endpoint.retain, payload)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                loop {
+                    match eventloop
+                        .poll()
+                        .await
+                        .map_err(|_| "MQTT connection or publish failed".to_string())?
+                    {
+                        Event::Outgoing(Outgoing::Publish(_))
+                            if endpoint.qos == QoS::AtMostOnce =>
+                        {
+                            break;
+                        }
+                        Event::Incoming(Packet::PubAck(ack)) => {
+                            if (ack.reason as u8) >= 128 {
+                                return Err("MQTT broker rejected publication".into());
+                            }
+                            break;
+                        }
+                        Event::Incoming(Packet::PubRec(ack)) if (ack.reason as u8) >= 128 => {
+                            return Err("MQTT broker rejected publication".into());
+                        }
+                        Event::Incoming(Packet::PubComp(ack)) => {
+                            if (ack.reason as u8) >= 128 {
+                                return Err("MQTT broker rejected publication".into());
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                uris.push(format!("{}/{}", endpoint.public_uri, topic));
+            }
+            // A disconnect request is best effort after every publication has completed.
+            let _ = client.disconnect().await;
+            let _ = tokio::time::timeout(Duration::from_millis(200), eventloop.poll()).await;
+            Ok(uris)
+        };
+        tokio::time::timeout(
+            Duration::from_secs(timeout.unwrap_or(30).max(1) as u64),
+            operation,
+        )
+        .await
+        .map_err(|_| "MQTT publication timed out before broker acknowledgement".to_string())?
     }
 
-    Ok((options, topic_part))
+    pub async fn publish_json(
+        config: &AppConfig,
+        topic: &str,
+        payload: &serde_json::Value,
+    ) -> Result<(), String> {
+        let endpoint = parse_mqtt_uri(
+            &config.mqtt_broker_url,
+            &format!("moqui-gw-bulk-{}", uuid::Uuid::new_v4()),
+            config,
+        )?;
+        let bytes = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
+        Self::publish_messages(endpoint, vec![(topic.to_string(), bytes)], Some(30)).await?;
+        Ok(())
+    }
 }
 
 fn safe_part(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 

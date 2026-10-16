@@ -49,98 +49,115 @@ impl SubscriptionManager {
         // 1. Start static MQTT read consumer if configured
         if self.config.mqtt_read_route_auto_startup
             && let Some(uri) = &self.config.mqtt_read_consume_uri
-                && (uri.starts_with("paho-mqtt5:") || uri.starts_with("tcp://") || uri.starts_with("mqtt://")) {
-                    let route_id = "mqtt-read-device-request-consumer".to_string();
-                    let cancel_token = CancellationToken::new();
-                    let topic = parse_static_topic(uri).unwrap_or_else(|| "iot/parameters/in".to_string());
-                    let dummy_context = RequestContext {
-                        request_name: "static-mqtt-read".to_string(),
-                        device_id: None,
-                        parent_request_name: None,
-                        request_type_enum_id: "DrtSubscribe".to_string(),
-                        purpose_enum_id: None,
-                        router_enum_id: None,
-                        connection_name: None,
-                        broker_uri: Some(uri.clone()),
-                        timeout: None,
-                        polling_interval: None,
-                        request_query: Some(topic.clone()),
-                        only_changed_parameters: None,
-                        driver_enum_id: None,
-                        driver_enum_code: None,
-                        transport_enum_id: None,
-                        transport_enum_code: None,
-                        transport_config: None,
-                        options: None,
-                        items: vec![],
-                    };
-                    if let Err(e) = MqttService::subscribe_mqtt(
-                        route_id.clone(),
-                        dummy_context,
-                        topic,
-                        self.db.clone(),
-                        self.notifier.clone(),
-                        self.config.clone(),
-                        cancel_token.clone(),
-                    ).await {
-                        warn!("Failed to start static MQTT consumer: {}", e);
-                    } else {
-                        info!("Started static MQTT consumer on {}", uri);
-                    }
-                }
+            && (uri.starts_with("paho-mqtt5:")
+                || uri.starts_with("tcp://")
+                || uri.starts_with("mqtt://"))
+        {
+            let route_id = "mqtt-read-device-request-consumer".to_string();
+            let cancel_token = CancellationToken::new();
+            let topic = parse_static_topic(uri).unwrap_or_else(|| "iot/parameters/in".to_string());
+            let dummy_context = RequestContext {
+                request_name: "static-mqtt-read".to_string(),
+                device_id: None,
+                parent_request_name: None,
+                request_type_enum_id: "DrtSubscribe".to_string(),
+                purpose_enum_id: None,
+                router_enum_id: None,
+                connection_name: None,
+                broker_uri: Some(uri.clone()),
+                timeout: None,
+                polling_interval: None,
+                request_query: Some(topic.clone()),
+                only_changed_parameters: None,
+                driver_enum_id: None,
+                driver_enum_code: None,
+                transport_enum_id: None,
+                transport_enum_code: None,
+                transport_config: None,
+                options: None,
+                items: vec![],
+            };
+            if let Err(e) = MqttService::subscribe_mqtt(
+                route_id.clone(),
+                dummy_context,
+                topic,
+                self.db.clone(),
+                self.notifier.clone(),
+                self.config.clone(),
+                cancel_token.clone(),
+            )
+            .await
+            {
+                warn!("Failed to start static MQTT consumer: {}", e);
+            } else {
+                info!("Started static MQTT consumer on {}", uri);
+            }
+        }
 
         // 2. Start static PLC log consumer if configured
         if self.config.plc_log_route_auto_startup
             && let Some(uri) = &self.config.plc_log_consume_uri
-                && (uri.starts_with("paho-mqtt5:") || uri.starts_with("tcp://") || uri.starts_with("mqtt://")) {
-                    let route_id = "plc-log-consumer".to_string();
-                    let cancel_token = CancellationToken::new();
-                    let topic = parse_static_topic(uri).unwrap_or_else(|| "moqui-plc".to_string());
-                    let dummy_context = RequestContext {
-                        request_name: "static-plc-log".to_string(),
-                        device_id: None,
-                        parent_request_name: None,
-                        request_type_enum_id: "DrtSubscribe".to_string(),
-                        purpose_enum_id: Some("DrpLogging".to_string()),
-                        router_enum_id: None,
-                        connection_name: None,
-                        broker_uri: Some(uri.clone()),
-                        timeout: None,
-                        polling_interval: None,
-                        request_query: Some(topic.clone()),
-                        only_changed_parameters: None,
-                        driver_enum_id: None,
-                        driver_enum_code: None,
-                        transport_enum_id: None,
-                        transport_enum_code: None,
-                        transport_config: None,
-                        options: None,
-                        items: vec![],
-                    };
-                    if let Err(e) = MqttService::subscribe_plc_log(
-                        route_id.clone(),
-                        dummy_context,
-                        topic,
-                        self.db.clone(),
-                        self.notifier.clone(),
-                        self.config.clone(),
-                        cancel_token.clone(),
-                    ).await {
-                        warn!("Failed to start static PLC log consumer: {}", e);
-                    } else {
-                        info!("Started static PLC log consumer on {}", uri);
-                    }
-                }
+            && (uri.starts_with("paho-mqtt5:")
+                || uri.starts_with("tcp://")
+                || uri.starts_with("mqtt://"))
+        {
+            let route_id = "plc-log-consumer".to_string();
+            let cancel_token = CancellationToken::new();
+            let topic = parse_static_topic(uri).unwrap_or_else(|| "moqui-plc".to_string());
+            let dummy_context = RequestContext {
+                request_name: "static-plc-log".to_string(),
+                device_id: None,
+                parent_request_name: None,
+                request_type_enum_id: "DrtSubscribe".to_string(),
+                purpose_enum_id: Some("DrpLogging".to_string()),
+                router_enum_id: None,
+                connection_name: None,
+                broker_uri: Some(uri.clone()),
+                timeout: None,
+                polling_interval: None,
+                request_query: Some(topic.clone()),
+                only_changed_parameters: None,
+                driver_enum_id: None,
+                driver_enum_code: None,
+                transport_enum_id: None,
+                transport_enum_code: None,
+                transport_config: None,
+                options: None,
+                items: vec![],
+            };
+            if let Err(e) = MqttService::subscribe_plc_log(
+                route_id.clone(),
+                dummy_context,
+                topic,
+                self.db.clone(),
+                self.notifier.clone(),
+                self.config.clone(),
+                cancel_token.clone(),
+            )
+            .await
+            {
+                warn!("Failed to start static PLC log consumer: {}", e);
+            } else {
+                info!("Started static PLC log consumer on {}", uri);
+            }
+        }
 
         if !self.config.startup_discovery_enabled {
             info!("Gateway startup DB discovery is disabled for this profile.");
             return;
         }
 
-        let identity = match self.db.inspect_gateway_identity(&self.config.gateway_device_id).await {
+        let identity = match self
+            .db
+            .inspect_gateway_identity(&self.config.gateway_device_id)
+            .await
+        {
             Ok(id) => id,
             Err(e) => {
-                error!("Gateway startup validation failed before route restore: {}", e);
+                error!(
+                    "Gateway startup validation failed before route restore: {}",
+                    e
+                );
                 return;
             }
         };
@@ -167,22 +184,26 @@ impl SubscriptionManager {
 
         for req_name in &request_names {
             match self.db.load_request_context(req_name).await {
-                Ok(ctx) => {
-                    match self.dispatch(&ctx).await {
-                        Ok(res) => {
-                            restored_requests += 1;
-                            if let Some(arr) = res.get("routeIdList").and_then(|v| v.as_array()) {
-                                restored_routes += arr.len();
-                            } else {
-                                restored_routes += 1;
-                            }
-                            info!("Restored DB-defined subscription for DeviceRequest {}", req_name);
+                Ok(ctx) => match self.dispatch(&ctx).await {
+                    Ok(res) => {
+                        restored_requests += 1;
+                        if let Some(arr) = res.get("routeIdList").and_then(|v| v.as_array()) {
+                            restored_routes += arr.len();
+                        } else {
+                            restored_routes += 1;
                         }
-                        Err(e) => {
-                            warn!("Failed to restore subscription for DeviceRequest {}: {}", req_name, e);
-                        }
+                        info!(
+                            "Restored DB-defined subscription for DeviceRequest {}",
+                            req_name
+                        );
                     }
-                }
+                    Err(e) => {
+                        warn!(
+                            "Failed to restore subscription for DeviceRequest {}: {}",
+                            req_name, e
+                        );
+                    }
+                },
                 Err(e) => {
                     warn!("Unable to load RequestContext for {}: {}", req_name, e);
                 }
@@ -233,12 +254,17 @@ impl SubscriptionManager {
     }
 
     /// Registers dynamic subscriptions for MQTT, OPC UA, or Modbus
-    async fn register_subscriptions(&self, context: &RequestContext) -> Result<serde_json::Value, String> {
+    async fn register_subscriptions(
+        &self,
+        context: &RequestContext,
+    ) -> Result<serde_json::Value, String> {
         if context.is_plc_log() {
-            let topic = context
-                .request_query
-                .as_deref()
-                .ok_or_else(|| format!("PLC log request {} has no query topic", context.request_name))?;
+            let topic = context.request_query.as_deref().ok_or_else(|| {
+                format!(
+                    "PLC log request {} has no query topic",
+                    context.request_name
+                )
+            })?;
 
             let route_id = format!("device-request-consumer-{}-0", context.request_name);
 
@@ -281,7 +307,12 @@ impl SubscriptionManager {
             }));
         }
 
-        let topics = resolve_topics(context);
+        let topics = if context.is_modbus() && !context.items.is_empty() {
+            // A Modbus polling task reads the whole request, not one task per register.
+            vec![context.request_name.clone()]
+        } else {
+            resolve_topics(context)
+        };
         if topics.is_empty() {
             return Err(format!(
                 "DeviceRequest {} has no topic/address to subscribe.",
@@ -415,20 +446,27 @@ impl SubscriptionManager {
 fn resolve_topics(context: &RequestContext) -> Vec<String> {
     let mut topics = Vec::new();
     if let Some(req_q) = &context.request_query
-        && !req_q.trim().is_empty() && !context.items.is_empty() {
-            topics.push(req_q.clone());
-        }
+        && !req_q.trim().is_empty()
+        && !context.items.is_empty()
+    {
+        topics.push(req_q.clone());
+    }
     for item in &context.items {
         if let Some(tq) = &item.target_query
-            && !tq.trim().is_empty() && !topics.contains(tq) {
-                topics.push(tq.clone());
-            }
+            && !tq.trim().is_empty()
+            && !topics.contains(tq)
+        {
+            topics.push(tq.clone());
+        }
     }
     topics
 }
 
 fn parse_static_topic(uri: &str) -> Option<String> {
-    if let Some(after_scheme) = uri.strip_prefix("paho-mqtt5:").or_else(|| uri.strip_prefix("paho:")) {
+    if let Some(after_scheme) = uri
+        .strip_prefix("paho-mqtt5:")
+        .or_else(|| uri.strip_prefix("paho:"))
+    {
         let topic = after_scheme.split('?').next().unwrap_or("").trim();
         if !topic.is_empty() {
             return Some(topic.to_string());
