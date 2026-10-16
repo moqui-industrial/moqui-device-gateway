@@ -215,9 +215,9 @@ schema. Its device identities are `GW_EDGE_01`, `VIRTUAL_PLC_01`, `DRV_EDGE_01`,
 `DG_EDGE_01`; request/parameter identities follow `moqui-device/DeviceTestData.xml`.
 The suffix template is expanded by `docker/initdb/30-load-gateway-fixtures.sh`.
 The Moqui XML fixture is now `type="test"`, excluded from ordinary seed loading.
-Only that canonical XML test suite requires optional `mantle-udm`; normal use
-of moqui-device and this gateway does not require Mantle. Follow moqui-device's
-test README when loading its WorkEffort/Measurement test records.
+The base XML tests need no Mantle. WorkEffort/Measurement telemetry is in the
+explicitly loaded `moqui-device/test/mantle/MantleTestData.xml` and requires
+optional `mantle-udm` only for those scenarios. Follow moqui-device's test README.
 
 ```bash
 docker compose -f docker/postgres-compose.yml -p moqui-gateway up -d
@@ -263,7 +263,7 @@ are in [tests/support/README.md](tests/support/README.md).
 | Modbus | Native TCP/TLS read, write and cyclic execution; not arbitrary Camel endpoint options |
 | OPC UA | Anonymous/security-none read, write and subscription tested; advanced Java/Camel security and connection options are not fully ported |
 | Trajectory MQTT export | Rust adds `/api/trajectory/export`; the reviewed Java branch has no matching endpoint yet |
-| ONNX trajectory inference | Belongs to moqui-device/an inference provider, not the gateway; see the [isolated Rust example](https://github.com/moqui/moqui-device/tree/mr-moqui/examples/onnx-obstacle) |
+| ONNX trajectory inference | Native optional moqui-device service using ort/ONNX Runtime, or an explicitly remote provider; see the [isolated Rust example](https://github.com/moqui/moqui-device/tree/mr-moqui/examples/onnx-obstacle) |
 
 These are shared application contracts with documented remaining differences,
 not a claim that every Camel route, endpoint option or deployment is interchangeable.
