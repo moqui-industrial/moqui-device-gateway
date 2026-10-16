@@ -150,10 +150,56 @@ payload type does not choose the table. Use `PLC_LOG_CONSUME_URI` or a modeled
 
 OPC UA read/write/subscription requests use `DcdOpcUa`, a TCP `DeviceConnection`
 and standard node IDs such as `ns=2;s=virtual_plc_feedback` or `ns=1;i=1005`.
-`RAW(...)` node syntax is accepted. The current OPC UA configuration uses
-anonymous sessions with security mode None; configure network exposure
-accordingly. Connection waits are bounded and subscription cancellation closes
-the session.
+`RAW(...)` node syntax is accepted. All three operations use the same security
+configuration. `DeviceConnection.options` accepts a JSON object (recommended)
+or comma-separated `key=value` pairs; legacy endpoint query options are also
+accepted and removed from the actual server URL. Explicit options override the
+URI query. Unknown options fail rather than being silently ignored.
+
+Supported options:
+
+| Option | Meaning / default |
+| --- | --- |
+| `securityPolicy` | `None` (default), `Basic256Sha256`, `Aes128_Sha256_RsaOaep`, `Aes256_Sha256_RsaPss`; full policy URIs also accepted |
+| `securityMode` / `messageSecurityMode` | `None` (default), `Sign`, `SignAndEncrypt`; must agree with the policy |
+| `applicationUri`, `applicationName` | Client application identity; defaults `urn:moqui:device:gateway`, `moqui-device-gateway` |
+| `pkiDir` | Client PKI root, default `runtime/opcua-pki` |
+| `certificateFile`, `privateKeyFile` | Application certificate (DER) and private key (PEM), absolute or relative to `pkiDir`; required for secure channels |
+| `trustServerCerts`, `verifyServerCerts` | Defaults **false**, **true**; provision trusted server certificates explicitly |
+| `username` / `userName`, `password` | Password user identity; requires `SignAndEncrypt` |
+| `usernameEnv`, `passwordEnv` | Environment variable names supplying credentials; preferred to literals in database/URI |
+| `identityCertificateFile`, `identityPrivateKeyFile` | X509 user certificate/key paths; separate from application/channel identity |
+
+Absent explicit credentials, `OPCUA_USERNAME` and `OPCUA_PASSWORD` are consulted.
+With neither password nor X509 identity, authentication is anonymous. Incomplete
+or conflicting identities are rejected. Secure deployments must provision the
+application certificate with a SAN matching `applicationUri`, trust the server
+in the client's PKI, and authorize/trust the client on the server. No sample
+keypair is generated automatically. Security `None` remains available for legacy
+isolated networks; async-opcua can log missing own-certificate diagnostics in
+that mode when no application keypair is provisioned.
+
+Example options for an encrypted password session:
+
+```json
+{
+  "securityPolicy": "Basic256Sha256",
+  "securityMode": "SignAndEncrypt",
+  "pkiDir": "/etc/moqui/opcua-pki",
+  "certificateFile": "own/cert.der",
+  "privateKeyFile": "private/private.pem",
+  "usernameEnv": "PLC_OPCUA_USERNAME",
+  "passwordEnv": "PLC_OPCUA_PASSWORD"
+}
+```
+
+Use async-opcua's `trusted` certificate store under `pkiDir`; its file naming is
+`<subject common-name DN> [<lowercase SHA1 thumbprint>].der` (for example
+`CN=server [abcd…].der`). The [secure fixture](tests/support/opcua_secure_server.py)
+shows the exact layout. Endpoint discovery, authentication and write retries are
+bounded. Read and monitored values must have good quality; bad, uncertain or
+empty values are errors. One-shot sessions disconnect on exit; subscriptions
+close their session on cancellation.
 
 The Rust extension also includes Modbus TCP read/write/cyclic requests (`DcdModbusTCP`; legacy `DcdModbus` is also accepted)
 with holding/input/coil/discrete targets. Modbus TLS requires a trusted PEM
@@ -261,7 +307,7 @@ are in [tests/support/README.md](tests/support/README.md).
 | MQTT | MQTT **v5** through `rumqttc::v5`; Java uses Camel/Paho MQTT5. QoS acknowledgements, session options, credentials and TLS are implemented |
 | File/SFTP | Native local file and SFTP transports, with known-host verification for SFTP |
 | Modbus | Native TCP/TLS read, write and cyclic execution; not arbitrary Camel endpoint options |
-| OPC UA | Anonymous/security-none read, write and subscription tested; advanced Java/Camel security and connection options are not fully ported |
+| OPC UA | Read/write/subscriptions with None, Basic256Sha256 and AES policies; explicit trust, password and X509 identities; only the documented options are accepted |
 | Trajectory MQTT export | Rust adds `/api/trajectory/export`; the reviewed Java branch has no matching endpoint yet |
 | ONNX trajectory inference | Native optional moqui-device service using ort/ONNX Runtime, or an explicitly remote provider; see the [isolated Rust example](https://github.com/moqui/moqui-device/tree/mr-moqui/examples/onnx-obstacle) |
 

@@ -6,6 +6,134 @@ use moqui_device_gateway::{
 };
 
 #[tokio::test]
+#[ignore = "requires secure OPC UA fixture and OPCUA_TEST_PKI"]
+async fn opcua_encrypted_authenticated_sessions_and_rejections() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".into()))
+        .try_init();
+    let root = std::path::PathBuf::from(
+        std::env::var("OPCUA_TEST_PKI")
+            .expect("Start opcua_secure_server.py and set OPCUA_TEST_PKI"),
+    );
+    let url = std::env::var("DATABASE_URL").expect("Use a disposable database");
+    let db = DatabaseService::init(&url, &url).await.unwrap();
+    let options = serde_json::json!({"securityPolicy":"Basic256Sha256","securityMode":"SignAndEncrypt",
+        "pkiDir":root.join("client-pki"),"certificateFile":root.join("client.der"),"privateKeyFile":root.join("client.pem"),
+        "username":"fixture-user","password":"fixture-password"});
+    let mut context:RequestContext=serde_json::from_value(serde_json::json!({"request_name":"secure-opcua","request_type_enum_id":"DrtWrite",
+        "device_id":"VIRTUAL_PLC_01","purpose_enum_id":"DrpControl","driver_enum_id":"DcdOpcUa","timeout":3,"broker_uri":"opc.tcp://127.0.0.1:12687/secure",
+        "options":options.to_string(),"items":[{"parameter_id":"TestPlcFeedbackParam","numeric_value":61.5,"target_query":"ns=2;s=review_value"}]})).unwrap();
+    let config = AppConfig::load();
+    OpcUaService::run_opcua_write(&context, &config)
+        .await
+        .expect("trusted secure write");
+    assert_eq!(
+        OpcUaService::run_read(&context, &db).await.unwrap()["rowCount"],
+        1
+    );
+    use moqui_device_gateway::{pipeline::InboundErrorNotifier, supervisor::SubscriptionManager};
+    let manager = SubscriptionManager::new(
+        db.clone(),
+        config.clone(),
+        InboundErrorNotifier::new(false, 60, None),
+    );
+    let mut subscription = context.clone();
+    subscription.request_type_enum_id = "DrtCyclic".into();
+    subscription.polling_interval = Some(100);
+    manager.dispatch(&subscription).await.unwrap();
+    context.items[0].numeric_value = Some(62.5);
+    OpcUaService::run_opcua_write(&context, &config)
+        .await
+        .unwrap();
+    let mut received = false;
+    for _ in 0..40 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let value: rust_decimal::Decimal = sqlx::query_scalar(
+            "SELECT NUMERIC_VALUE FROM PARAMETER WHERE PARAMETER_ID='TestPlcFeedbackParam'",
+        )
+        .fetch_one(&db.moqui_pool)
+        .await
+        .unwrap();
+        if value.to_string().parse::<f64>().unwrap() == 62.5 {
+            received = true;
+            break;
+        }
+    }
+    subscription.request_type_enum_id = "DrtUnsubscribe".into();
+    manager.unsubscribe(&subscription).await.unwrap();
+    assert!(
+        received,
+        "encrypted monitored update must reach the database"
+    );
+    let mut wrong = options.clone();
+    wrong["password"] = "wrong-password".into();
+    context.options = Some(wrong.to_string());
+    assert!(
+        OpcUaService::run_read(&context, &db).await.is_err(),
+        "wrong password must be rejected"
+    );
+    let mut untrusted = options.clone();
+    let empty = root.join("untrusted-client-pki");
+    std::fs::create_dir_all(&empty).unwrap();
+    untrusted["pkiDir"] = empty.to_string_lossy().into_owned().into();
+    context.options = Some(untrusted.to_string());
+    assert!(
+        OpcUaService::run_read(&context, &db).await.is_err(),
+        "untrusted server must be rejected"
+    );
+    // X509 user identity instead of username/password, over the same encrypted channel.
+    let mut certificate = options.clone();
+    certificate.as_object_mut().unwrap().remove("username");
+    certificate.as_object_mut().unwrap().remove("password");
+    certificate["identityCertificateFile"] = root
+        .join("client.der")
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    certificate["identityPrivateKeyFile"] = root
+        .join("client.pem")
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    context.options = Some(certificate.to_string());
+    assert_eq!(
+        OpcUaService::run_read(&context, &db).await.unwrap()["rowCount"],
+        1
+    );
+    certificate["securityMode"] = "Sign".into();
+    context.options = Some(certificate.to_string());
+    assert_eq!(
+        OpcUaService::run_read(&context, &db).await.unwrap()["rowCount"],
+        1
+    );
+    for policy in ["Aes128_Sha256_RsaOaep", "Aes256_Sha256_RsaPss"] {
+        let mut aes = options.clone();
+        aes["securityPolicy"] = policy.into();
+        context.options = Some(aes.to_string());
+        assert_eq!(
+            OpcUaService::run_read(&context, &db).await.expect(policy)["rowCount"],
+            1
+        );
+    }
+    let mut unknown_client = options.clone();
+    unknown_client["certificateFile"] = root
+        .join("untrusted-client.der")
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    unknown_client["privateKeyFile"] = root
+        .join("untrusted-client.pem")
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    context.options = Some(unknown_client.to_string());
+    assert!(
+        OpcUaService::run_read(&context, &db).await.is_err(),
+        "server must reject untrusted client certificate"
+    );
+}
+
+#[tokio::test]
 #[ignore = "requires an SFTP server and SFTP_TEST_URI"]
 async fn sftp_writes_and_overwrites_remote_binary_file() {
     let uri = std::env::var("SFTP_TEST_URI").expect("Set SFTP_TEST_URI with a verified host key");

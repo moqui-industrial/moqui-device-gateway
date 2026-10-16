@@ -22,4 +22,25 @@ The Modbus test starts its own TCP fixture; no external Modbus server is needed.
 cargo test --locked --test transport_integration_test -- --ignored --nocapture
 ```
 
-These fixtures do not verify plant hardware or production OPC UA security modes.
+For encrypted OPC UA tests, install `asyncua` and `cryptography`, then start the
+separate secure fixture (loopback port 12687). Its argument must be an isolated
+scratch directory: certificates/private keys are generated there for this test.
+They are short-lived test identities, not deployment credentials.
+
+```bash
+python tests/support/opcua_secure_server.py /tmp/moqui-opcua-test-pki
+```
+
+After it starts, run only OPC UA cases, sequentially because they share parameters:
+
+```bash
+OPCUA_TEST_PKI=/tmp/moqui-opcua-test-pki \
+  cargo test --locked --test transport_integration_test opcua_ -- --ignored --nocapture --test-threads=1
+```
+
+Keep `DATABASE_URL` pointing at a disposable Moqui-loaded database and start the
+plain fixture too. The secure test covers Basic256Sha256 Sign/SignAndEncrypt,
+both AES policies with SignAndEncrypt, password/X509 identities, monitored
+updates and cancellation. Wrong passwords, untrusted servers and untrusted
+client certificates must fail. Both sides validate their peer's certificate.
+These tests do not verify plant hardware or site PKI commissioning.

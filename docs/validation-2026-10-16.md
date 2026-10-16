@@ -54,3 +54,19 @@ The Java comparison baseline is the gateway's current `main` branch (previously
 called `master`). Rust shares the model and supported REST/protocol contracts;
 Java-specific Camel options, SEDA routes and JVM integrations are not Rust
 execution engines. See the README's explicit supported settings.
+
+## Secure OPC UA follow-up
+
+The plain and secure OPC UA integration cases passed together (2 tests) against
+local asyncua fixtures and the disposable Moqui database. Actual encrypted
+read/write/subscription traffic was exercised with Basic256Sha256/SignAndEncrypt
+and password authentication. X509 user identity, Basic256Sha256/Sign and both
+AES policies with SignAndEncrypt passed reads. Wrong passwords, empty server
+trust and an untrusted client certificate were rejected. The tests also cover
+subscription cancellation; sessions disconnect on scope exit. Non-good/empty
+values are rejected, and write attempts use a bounded retry deadline.
+
+This verifies the implemented protocol/security configuration against a test
+server; it does not establish interoperability with every industrial server,
+certificate authority, revocation policy or plant authorization configuration.
+See the fixture instructions for repeatable, isolated PKI generation.

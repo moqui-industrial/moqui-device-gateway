@@ -1,12 +1,13 @@
+#[path = "opcua_config.rs"]
+mod settings;
 use crate::config::AppConfig;
 use crate::db::DatabaseService;
 use crate::model::{RequestContext, RequestItem};
 use crate::pipeline::{InboundErrorNotifier, Normalizer};
-use opcua::client::{ClientBuilder, DataChangeCallback, IdentityToken, MonitoredItem, Session};
+use opcua::client::{DataChangeCallback, MonitoredItem, Session};
 use opcua::types::{
-    AttributeId, DataValue, EndpointDescription, MessageSecurityMode, MonitoredItemCreateRequest,
-    MonitoringMode, MonitoringParameters, NodeId, ReadValueId, TimestampsToReturn, UserTokenPolicy,
-    Variant, WriteValue,
+    AttributeId, DataValue, MonitoredItemCreateRequest, MonitoringMode, MonitoringParameters,
+    NodeId, ReadValueId, TimestampsToReturn, Variant, WriteValue,
 };
 use serde_json::json;
 use std::str::FromStr;
@@ -16,43 +17,31 @@ use tracing::{debug, info, warn};
 
 pub struct OpcUaService;
 
-struct SessionLoop(tokio::task::JoinHandle<opcua::types::StatusCode>);
+pub(super) struct SessionLoop {
+    pub session: std::sync::Arc<Session>,
+    pub task: Option<tokio::task::JoinHandle<opcua::types::StatusCode>>,
+}
 impl Drop for SessionLoop {
     fn drop(&mut self) {
-        self.0.abort();
+        if let Some(task) = self.task.take() {
+            let session = self.session.clone();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ =
+                        tokio::time::timeout(Duration::from_secs(2), session.disconnect()).await;
+                    task.abort();
+                });
+            } else {
+                task.abort();
+            }
+        }
     }
 }
 
 impl OpcUaService {
     /// Builds endpoint description from RequestContext
     pub fn resolve_endpoint_url(context: &RequestContext) -> Result<String, String> {
-        if let Some(transport) = &context.transport_config {
-            let scheme = if let Some(code) = &context.transport_enum_code {
-                if code == "tcp" { "opc.tcp" } else { code }
-            } else {
-                "opc.tcp"
-            };
-            if transport.starts_with("opc.") {
-                return Ok(transport.clone());
-            } else {
-                return Ok(format!("{}://{}", scheme, transport));
-            }
-        }
-        if let Some(broker) = &context.broker_uri {
-            if let Some(stripped) = broker.strip_prefix("milo-client:") {
-                return Ok(stripped.to_string());
-            }
-            if let Some(stripped) = broker.strip_prefix("opcua:") {
-                return Ok(stripped.to_string());
-            }
-            if broker.starts_with("opc.tcp://") {
-                return Ok(broker.clone());
-            }
-        }
-        Err(format!(
-            "DeviceRequest {} does not define transportConfig or brokerUri for OPC UA",
-            context.request_name
-        ))
+        Ok(settings::Settings::parse(context)?.endpoint)
     }
 
     /// Parses NodeId from string handling RAW(...) or standard ns=...;s=... or numeric
@@ -85,37 +74,7 @@ impl OpcUaService {
         let endpoint_url = Self::resolve_endpoint_url(context)?;
         info!("Connecting to OPC UA endpoint for read: {}", endpoint_url);
 
-        let mut client = ClientBuilder::new()
-            .application_name("moqui-device-gateway")
-            .application_uri("urn:moqui:device:gateway")
-            .trust_server_certs(true)
-            .create_sample_keypair(true)
-            .client()
-            .map_err(|e| format!("Failed to create OPC UA client: {:?}", e))?;
-
-        let endpoint: EndpointDescription = (
-            endpoint_url.as_str(),
-            "None",
-            MessageSecurityMode::None,
-            UserTokenPolicy::anonymous(),
-        )
-            .into();
-
-        let (session, event_loop) = client
-            .connect_to_matching_endpoint(endpoint, IdentityToken::Anonymous)
-            .await
-            .map_err(|e| format!("OPC UA connect error to {}: {:?}", endpoint_url, e))?;
-
-        let _loop_guard = SessionLoop(event_loop.spawn());
-        let connected = tokio::time::timeout(
-            Duration::from_secs(context.timeout.unwrap_or(30).max(1) as u64),
-            session.wait_for_connection(),
-        )
-        .await
-        .map_err(|_| "OPC UA connection timed out".to_string())?;
-        if !connected {
-            return Err("OPC UA session connection failed".into());
-        }
+        let (session, _loop_guard) = settings::connect(context).await?;
 
         let mut read_nodes = Vec::new();
         let mut source_queries = Vec::new();
@@ -142,10 +101,18 @@ impl OpcUaService {
             .await
             .map_err(|e| format!("OPC UA read error: {:?}", e))?;
 
+        if values.len() != source_queries.len() {
+            return Err("OPC UA server returned an unexpected result count".into());
+        }
         let mut normalized_rows = Vec::new();
         for (i, val) in values.into_iter().enumerate() {
-            if val.status.is_some_and(|status| status.is_bad()) || val.value.is_none() {
-                return Err("OPC UA server returned a bad or empty read result".into());
+            if val.status.is_some_and(|status| !status.is_good())
+                || val
+                    .value
+                    .as_ref()
+                    .is_none_or(|value| matches!(value, Variant::Empty))
+            {
+                return Err("OPC UA server returned a non-good or empty read result".into());
             }
             let query = &source_queries[i];
             let raw_str = variant_to_string(&val.value);
@@ -190,37 +157,7 @@ impl OpcUaService {
 
         let timeout_ms = context.timeout.unwrap_or(5).max(1).saturating_mul(1000);
 
-        let mut client = ClientBuilder::new()
-            .application_name("moqui-device-gateway")
-            .application_uri("urn:moqui:device:gateway")
-            .trust_server_certs(true)
-            .create_sample_keypair(true)
-            .client()
-            .map_err(|e| format!("Failed to create OPC UA client: {:?}", e))?;
-
-        let endpoint: EndpointDescription = (
-            endpoint_url.as_str(),
-            "None",
-            MessageSecurityMode::None,
-            UserTokenPolicy::anonymous(),
-        )
-            .into();
-
-        let (session, event_loop) = client
-            .connect_to_matching_endpoint(endpoint, IdentityToken::Anonymous)
-            .await
-            .map_err(|e| format!("OPC UA connect error to {}: {:?}", endpoint_url, e))?;
-
-        let _loop_guard = SessionLoop(event_loop.spawn());
-        let connected = tokio::time::timeout(
-            Duration::from_secs(context.timeout.unwrap_or(30).max(1) as u64),
-            session.wait_for_connection(),
-        )
-        .await
-        .map_err(|_| "OPC UA connection timed out".to_string())?;
-        if !connected {
-            return Err("OPC UA session connection failed".into());
-        }
+        let (session, _loop_guard) = settings::connect(context).await?;
 
         let mut publish_uri_list = Vec::new();
         for item in &context.items {
@@ -295,37 +232,7 @@ impl OpcUaService {
         let node_id = Self::parse_node_id(&node_query)?;
         let polling_interval = context.polling_interval.unwrap_or(100).max(1) as u64;
 
-        let mut client = ClientBuilder::new()
-            .application_name("moqui-device-gateway")
-            .application_uri("urn:moqui:device:gateway")
-            .trust_server_certs(true)
-            .create_sample_keypair(true)
-            .client()
-            .map_err(|e| format!("Failed to create OPC UA client: {:?}", e))?;
-
-        let endpoint: EndpointDescription = (
-            endpoint_url.as_str(),
-            "None",
-            MessageSecurityMode::None,
-            UserTokenPolicy::anonymous(),
-        )
-            .into();
-
-        let (session, event_loop) = client
-            .connect_to_matching_endpoint(endpoint, IdentityToken::Anonymous)
-            .await
-            .map_err(|e| format!("OPC UA connect error to {}: {:?}", endpoint_url, e))?;
-
-        let _loop_guard = SessionLoop(event_loop.spawn());
-        let connected = tokio::time::timeout(
-            Duration::from_secs(context.timeout.unwrap_or(30).max(1) as u64),
-            session.wait_for_connection(),
-        )
-        .await
-        .map_err(|_| "OPC UA connection timed out".to_string())?;
-        if !connected {
-            return Err("OPC UA session connection failed".into());
-        }
+        let (session, _loop_guard) = settings::connect(&context).await?;
 
         let db_clone = db.clone();
         let notifier_clone = notifier.clone();
@@ -341,6 +248,22 @@ impl OpcUaService {
             let query = query_clone.clone();
 
             tokio::spawn(async move {
+                if val.status.is_some_and(|status| !status.is_good())
+                    || val
+                        .value
+                        .as_ref()
+                        .is_none_or(|value| matches!(value, Variant::Empty))
+                {
+                    notifier
+                        .record_error(
+                            &route_id,
+                            Some(&context.request_name),
+                            "OPC UA",
+                            "Non-good/empty monitored value",
+                        )
+                        .await;
+                    return;
+                }
                 let raw_str = variant_to_string(&val.value);
                 let rows = Normalizer::normalize_inbound_payload(&context, &query, &raw_str);
                 if rows.is_empty() {
@@ -406,8 +329,11 @@ impl OpcUaService {
                 "OPC UA subscription cancelled for route {}",
                 route_for_cancel
             );
-            let _ = session.delete_subscriptions(&[sub_id]).await;
-            let _ = session.disconnect().await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(2),
+                session.delete_subscriptions(&[sub_id]),
+            )
+            .await;
         });
 
         Ok(())
@@ -424,19 +350,25 @@ async fn write_with_retry(
 
     while tokio::time::Instant::now() < deadline {
         attempts += 1;
-        match session.write(std::slice::from_ref(&write_val)).await {
-            Ok(status_codes) => {
+        match tokio::time::timeout_at(deadline, session.write(std::slice::from_ref(&write_val)))
+            .await
+        {
+            Ok(Ok(status_codes)) => {
                 if let Some(sc) = status_codes.first()
                     && sc.is_good()
                 {
                     return Ok(());
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 debug!("OPC UA write attempt {} failed: {:?}", attempts, e);
             }
+            Err(_) => break,
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep_until(
+            (tokio::time::Instant::now() + Duration::from_millis(200)).min(deadline),
+        )
+        .await;
     }
 
     Err(format!(
