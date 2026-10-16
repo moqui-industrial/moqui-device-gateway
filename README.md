@@ -7,12 +7,8 @@ Use [MR-Moqui master](https://github.com/moqui/mr-moqui) with the `mr-moqui`
 branches of [moqui-device](https://github.com/moqui/moqui-device/tree/mr-moqui)
 and [moqui-math](https://github.com/moqui/moqui-math/tree/mr-moqui).
 
-The Java implementation uses Quarkus/Apache Camel on
-[`main`](https://github.com/moqui/moqui-device-gateway/tree/main) (formerly
-`master`). Follow the README of the selected branch: Gradle, GraalVM, Camel
-routes and SEDA endpoints belong to the Java gateway. This Rust gateway uses
-supervised Tokio tasks and async protocol clients; it accepts `paho-mqtt5:` URI
-syntax for compatibility, without running Camel.
+The gateway uses supervised Tokio tasks and asynchronous protocol clients.
+This README covers building, configuring and running the Rust implementation.
 
 ## Model and responsibility
 
@@ -39,7 +35,7 @@ subscribe/event/state-change/cyclic requests routed through
 runtime tasks; update the persistent request dates/routing/membership to prevent
 restoration after restart.
 
-Use the schema and seed managed by MR-Moqui, with its default Java-compatible
+Use the schema and seed managed by MR-Moqui, with its default
 SQL naming (`DeviceRequest` -> `device_request`). Legacy quoted MR-Moqui names
 are not supported by the gateway SQL. This is a shared domain model, not a
 separate gateway-owned production schema.
@@ -60,11 +56,8 @@ export MQTT_PASSWORD=artemis
 cargo run --locked
 ```
 
-The process reads `.env` (or `runtime/.env`), then configuration from environment
-variables and an optional `.properties` file/directory selected by
-`SMALLRYE_CONFIG_LOCATIONS`. Dotted gateway property names are supported for
-migration; Camel route expressions and SmallRye interpolation are not evaluated.
-Native Rust environment variables are recommended.
+The process reads `.env` (or `runtime/.env`) and environment variables.
+The table below lists the native Rust configuration names.
 
 | Variable | Default / purpose |
 |---|---|
@@ -72,7 +65,7 @@ Native Rust environment variables are recommended.
 | `LOG_DATABASE_URL` | Telemetry PostgreSQL URL; defaults to `DATABASE_URL` |
 | `GATEWAY_DEVICE_ID` | Required logical identity |
 | `HTTP_HOST`, `HTTP_PORT` | `0.0.0.0`, `8081` |
-| `APP_PROFILE` | `prod`; `QUARKUS_PROFILE` is a legacy alias |
+| `APP_PROFILE` | `prod` |
 | `GATEWAY_API_AUTH_ENABLED` | `true` |
 | `GATEWAY_API_AUTH_HEADER` | `X-API-Key` |
 | `GATEWAY_API_AUTH_TOKEN` | Must be a non-default token in production |
@@ -92,12 +85,6 @@ Native Rust environment variables are recommended.
 | `GATEWAY_INBOUND_ERROR_NOTIFICATION_THRESHOLD_SECONDS` | `60` |
 | `GATEWAY_INBOUND_ERROR_NOTIFICATION_URI` | Optional HTTP notification endpoint |
 
-`QUARKUS_DATASOURCE_JDBC_URL` and `QUARKUS_DATASOURCE_LOG_JDBC_URL` remain aliases
-for database URLs and accept the `jdbc:postgresql://` prefix. Put credentials in
-the URL when using those aliases; separate Java username/password settings are
-not automatically combined. The legacy `MQTT_WRITE_AFTERPUBLISH_ENABLED` is
-accepted; prefer the native spelling with `_AFTER_PUBLISH_`.
-
 Profiles `dev`, `test`, `local`, `integration` bypass API authentication for local
 testing. Production rejects the shipped placeholder tokens. API keys use the
 configured header or `Authorization: Bearer <token>`; query-string API keys are
@@ -106,6 +93,8 @@ not accepted. Keep credentials in deployment configuration rather than seed data
 ## Protocols and data contracts
 
 ### MQTT v5
+
+MQTT v5 uses the native Rust client `rumqttc::v5`.
 
 Examples of compatible `DeviceRequest.brokerUri` values:
 
@@ -118,8 +107,7 @@ mqtts://broker:8883
 Topics come from `DeviceRequestItem.query`, then `DeviceRequest.query`, then the
 `paho-mqtt5:` topic. Options include `clientId`, `userName`, `password`, `qos`
 (0/1/2), `cleanStart`, `sessionExpiryInterval`, `retain`/`retained`. TLS uses the
-client's default trusted roots. Unsupported Camel-specific endpoint behavior is
-not an alternate runtime inside this process.
+client's default trusted roots.
 
 Writes publish the parameter identity/value envelope plus the reviewed
 `requestItemName` key, when present. Reserved envelope keys cannot be overridden.
@@ -147,6 +135,8 @@ payload type does not choose the table. Use `PLC_LOG_CONSUME_URI` or a modeled
 `DrpLogging` subscription on the `moqui-plc` topic.
 
 ### OPC UA and Modbus
+
+OPC UA uses the Rust `async-opcua` client.
 
 OPC UA read/write/subscription requests use `DcdOpcUa`, a TCP `DeviceConnection`
 and standard node IDs such as `ns=2;s=virtual_plc_feedback` or `ns=1;i=1005`.
@@ -203,10 +193,7 @@ close their session on cancellation.
 
 The Rust extension also includes Modbus TCP read/write/cyclic requests (`DcdModbusTCP`; legacy `DcdModbus` is also accepted)
 with holding/input/coil/discrete targets. Modbus TLS requires a trusted PEM
-bundle in `MODBUS_TLS_CA_FILE` and verifies the endpoint hostname; no hard-coded
-server name or empty trust store is used. This is separate from Java gateway
-parity. Do not infer coverage of vendor fieldbuses or production TLS policies
-from the generic protocol clients.
+bundle in `MODBUS_TLS_CA_FILE` and verifies the endpoint hostname.
 
 ### Files, recipes and trajectories
 
@@ -273,8 +260,8 @@ export GATEWAY_API_AUTH_TOKEN='local-development-token'
 docker compose -f docker/device-gateway-compose.yml -p moqui-gateway up -d --build
 ```
 
-The gateway Dockerfile is `Dockerfile` at this branch's root. There is no GraalVM
-Dockerfile on this branch. Container requests must use broker addresses reachable
+The gateway Dockerfile is `Dockerfile` at this branch's root.
+Container requests must use broker addresses reachable
 from that container; `localhost` inside a container is not the Docker host.
 The Compose seed uses `host.docker.internal` for a host-published broker.
 PostgreSQL initializes fixtures only when its data volume is new.
@@ -298,18 +285,7 @@ See [the integration validation record](docs/validation-2026-10-16.md) for the
 executed checks and their scope. Additional OPC UA/SFTP/Modbus fixture instructions
 are in [tests/support/README.md](tests/support/README.md).
 
-## Java/Rust compatibility and remaining differences
+## Configuration migration
 
-| Contract | Rust branch compared with Java/Quarkus/Camel |
-| --- | --- |
-| Database and device scope | Same modeled devices, requests, parameters, configurations and content; Rust uses Moqui's Java-compatible SQL names |
-| Core REST operations | Same run-request, transfer-content and export-config paths and JSON intent; Rust also enforces request scope |
-| MQTT | MQTT **v5** through `rumqttc::v5`; Java uses Camel/Paho MQTT5. QoS acknowledgements, session options, credentials and TLS are implemented |
-| File/SFTP | Native local file and SFTP transports, with known-host verification for SFTP |
-| Modbus | Native TCP/TLS read, write and cyclic execution; not arbitrary Camel endpoint options |
-| OPC UA | Read/write/subscriptions with None, Basic256Sha256 and AES policies; explicit trust, password and X509 identities; only the documented options are accepted |
-| Trajectory MQTT export | Rust adds `/api/trajectory/export`; the reviewed Java branch has no matching endpoint yet |
-| ONNX trajectory inference | Native optional moqui-device service using ort/ONNX Runtime, or an explicitly remote provider; see the [isolated Rust example](https://github.com/moqui/moqui-device/tree/mr-moqui/examples/onnx-obstacle) |
-
-These are shared application contracts with documented remaining differences,
-not a claim that every Camel route, endpoint option or deployment is interchangeable.
+For imported configuration, legacy environment aliases and a comparison with the
+other gateway implementation, see [the compatibility guide](docs/java-compatibility.md).
