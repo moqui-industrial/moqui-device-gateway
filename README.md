@@ -214,6 +214,10 @@ The SQL under `tests/resources` is a minimal test fixture, not a production
 schema. Its device identities are `GW_EDGE_01`, `VIRTUAL_PLC_01`, `DRV_EDGE_01`,
 `DG_EDGE_01`; request/parameter identities follow `moqui-device/DeviceTestData.xml`.
 The suffix template is expanded by `docker/initdb/30-load-gateway-fixtures.sh`.
+The Moqui XML fixture is now `type="test"`, excluded from ordinary seed loading.
+Only that canonical XML test suite requires optional `mantle-udm`; normal use
+of moqui-device and this gateway does not require Mantle. Follow moqui-device's
+test README when loading its WorkEffort/Measurement test records.
 
 ```bash
 docker compose -f docker/postgres-compose.yml -p moqui-gateway up -d
@@ -247,3 +251,19 @@ filename confinement. These checks do not replace CODESYS or field commissioning
 See [the integration validation record](docs/validation-2026-10-16.md) for the
 executed checks and their scope. Additional OPC UA/SFTP/Modbus fixture instructions
 are in [tests/support/README.md](tests/support/README.md).
+
+## Java/Rust compatibility and remaining differences
+
+| Contract | Rust branch compared with Java/Quarkus/Camel |
+| --- | --- |
+| Database and device scope | Same modeled devices, requests, parameters, configurations and content; Rust uses Moqui's Java-compatible SQL names |
+| Core REST operations | Same run-request, transfer-content and export-config paths and JSON intent; Rust also enforces request scope |
+| MQTT | MQTT **v5** through `rumqttc::v5`; Java uses Camel/Paho MQTT5. QoS acknowledgements, session options, credentials and TLS are implemented |
+| File/SFTP | Native local file and SFTP transports, with known-host verification for SFTP |
+| Modbus | Native TCP/TLS read, write and cyclic execution; not arbitrary Camel endpoint options |
+| OPC UA | Anonymous/security-none read, write and subscription tested; advanced Java/Camel security and connection options are not fully ported |
+| Trajectory MQTT export | Rust adds `/api/trajectory/export`; the reviewed Java branch has no matching endpoint yet |
+| ONNX trajectory inference | Belongs to moqui-device/an inference provider, not the gateway; see the [isolated Rust example](https://github.com/moqui/moqui-device/tree/mr-moqui/examples/onnx-obstacle) |
+
+These are shared application contracts with documented remaining differences,
+not a claim that every Camel route, endpoint option or deployment is interchangeable.
