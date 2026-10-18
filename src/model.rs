@@ -141,6 +141,7 @@ impl fmt::Debug for Connection {
 }
 impl Connection {
     /// The key includes credentials but is never exposed through Debug or diagnostics.
+    #[cfg(any(feature = "modbus", feature = "opcua"))]
     pub(crate) fn session_key(&self) -> String {
         format!(
             "{:?}\0{}\0{:?}\0{:?}\0{:?}",
