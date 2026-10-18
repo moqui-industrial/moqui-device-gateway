@@ -1,0 +1,68 @@
+diff --git a/service/moqui/device/DeviceServices.xml b/service/moqui/device/DeviceServices.xml
+index c4f6143..612b3ff 100644
+--- a/service/moqui/device/DeviceServices.xml
++++ b/service/moqui/device/DeviceServices.xml
+@@ -315,7 +315,16 @@ along with this software (see the LICENSE.md file). If not, see
+         <description>Run a device request.</description>
+         <in-parameters>
+             <parameter name="requestName" required="true"/>
++            <parameter name="deviceContentId"/>
++            <parameter name="transferFiles" type="List"/>
+         </in-parameters>
++        <out-parameters>
++            <parameter name="status"/>
++            <parameter name="itemResults" type="List"/>
++            <parameter name="subscriptionId"/>
++            <parameter name="transferredFiles" type="List"/>
++            <parameter name="errorMessage"/>
++        </out-parameters>
+         <actions>
+             <entity-find-one entity-name="moqui.device.DeviceRequest" value-field="request" cache="true"/>
+             <if condition="!request">
+@@ -358,21 +367,26 @@ along with this software (see the LICENSE.md file). If not, see
+                     <econdition field-name="changedEntityName" value="moqui.math.Parameter"/>
+                     <econdition field-name="pkPrimaryValue" operator="in" from="parameterIdSet"/>
+                     <econdition field-name="changedDate" operator="greater" from="request.lastUpdatedStamp"/>
+-                    <order-by field-name="parameterId"/>
++                    <order-by field-name="pkPrimaryValue"/>
+                     <select-field field-name="pkPrimaryValue"/>
+                 </entity-find>
+                 <set field="changedIds" from="(changedRows ?? []).map(it => it.pkPrimaryValue)"/>
+                 <set field="requestItemList" from="(requestItemList ?? []).filter(it => changedIds.includes(it.parameterId))"/>
+             </if>
+-            <if condition="!(bulkRequestItemList?.length) &amp;&amp; !(requestItemList?.length) &amp;&amp; !request.query">
++            <if condition="!(bulkRequestItemList?.length) &amp;&amp; !(requestItemList?.length) &amp;&amp; !request.query &amp;&amp; !['DrtUnsubscribe', 'DrtContentTransfer', 'DrtConfigWrite'].includes(request.requestTypeEnumId)">
++                <set field="status" value="unchanged"/>
+                 <return message="The device request with name ${requestName} has no items to process."/>
+             </if>
+             <log level="info" message="Running device request with name ${request.requestName}."/>
++            <set field="status" value="completed"/>
+             <!-- Call the configured service. -->
+             <service-call name="${request.runServiceName}" in-map="{device:device, request:request,
+-                connection:connection,
++                connection:connection, deviceContentId:deviceContentId, transferFiles:transferFiles,
+                 bulkRequestItemList:bulkRequestItemList, requestItemList:requestItemList}"
+                 out-map="context" disable-authz="true" transaction="ignore"/>
++            <if condition="['failed', 'partial', 'uncertain'].includes(status)">
++                <script>ec.message.addError(errorMessage || `Device request ${requestName}: ${status}. Inspect itemResults.`);</script>
++            </if>
+         </actions>
+     </service>
+     <!-- The interface that tools or libraries will need to implement for fieldbus communications. -->
+@@ -384,7 +398,16 @@ along with this software (see the LICENSE.md file). If not, see
+             <parameter name="connection" type="EntityValue"/>
+             <parameter name="requestItemList" type="List"/>
+             <parameter name="bulkRequestItemList" type="List"/>
++            <parameter name="deviceContentId"/>
++            <parameter name="transferFiles" type="List"/>
+         </in-parameters>
++        <out-parameters>
++            <parameter name="status"/>
++            <parameter name="itemResults" type="List"/>
++            <parameter name="subscriptionId"/>
++            <parameter name="transferredFiles" type="List"/>
++            <parameter name="errorMessage"/>
++        </out-parameters>
+     </service>
+ 
+     <!-- ========== DeviceContent Services ========== -->

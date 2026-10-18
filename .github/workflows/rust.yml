@@ -1,0 +1,39 @@
+name: Rust
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  component:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: moqui/mr-moqui
+          ref: ed07b11228cab9296b4793c4b21f3e0fb036bed2
+          path: mr-moqui
+      - uses: actions/checkout@v4
+        with:
+          path: mr-moqui/runtime/component/moqui-fieldbus
+      - uses: actions/checkout@v4
+        with:
+          repository: moqui/moqui-device
+          ref: mr-moqui
+          path: mr-moqui/runtime/component/moqui-device
+      - name: Apply general service interface migration
+        working-directory: mr-moqui/runtime/component/moqui-device
+        run: |
+          if git apply --check ../moqui-fieldbus/patches/moqui-device-mr-moqui.patch; then
+            git apply ../moqui-fieldbus/patches/moqui-device-mr-moqui.patch
+          else
+            git apply --reverse --check ../moqui-fieldbus/patches/moqui-device-mr-moqui.patch
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        working-directory: mr-moqui/runtime/component/moqui-fieldbus
+        run: cargo fmt --package moqui-fieldbus -- --check
+      - name: Test
+        run: cargo test --locked --manifest-path mr-moqui/runtime/component/moqui-fieldbus/Cargo.toml
+      - name: Lint
+        run: cargo clippy --locked --manifest-path mr-moqui/runtime/component/moqui-fieldbus/Cargo.toml --all-targets -- -D warnings
