@@ -54,7 +54,7 @@ async fn broker(write: bool, reject: bool) -> (String, tokio::task::JoinHandle<(
         if write {
             assert_eq!(header & 0xf6, 0x32);
             let len = u16::from_be_bytes([body[0], body[1]]) as usize;
-            assert_eq!(&body[2..2 + len], b"test/topic");
+            assert_eq!(&body[2..2 + len], b"/test/topic");
             let id = &body[2 + len..4 + len];
             assert_eq!(body[4 + len], 0);
             let value: serde_json::Value = serde_json::from_slice(&body[5 + len..]).unwrap();
@@ -70,7 +70,7 @@ async fn broker(write: bool, reject: bool) -> (String, tokio::task::JoinHandle<(
             assert_eq!(header, 0x82);
             let id = &body[..2];
             assert_eq!(body[2], 0);
-            let topic = b"test/topic";
+            let topic = b"/test/topic";
             let mut publish = vec![0, topic.len() as u8];
             publish.extend(topic);
             publish.push(0);
@@ -85,7 +85,7 @@ async fn broker(write: bool, reject: bool) -> (String, tokio::task::JoinHandle<(
 }
 fn request(endpoint: String, operation: Operation) -> Arc<PreparedDeviceRequest> {
     let mut r = common::request(Protocol::Mqtt, endpoint, operation);
-    r.items[0].address = "test/topic".into();
+    r.items[0].address = "/test/topic".into();
     Arc::new(r)
 }
 #[tokio::test]

@@ -87,9 +87,6 @@ pub fn read_payload(r: &PreparedDeviceRequest, bytes: &[u8]) -> Result<Vec<ItemR
                 {
                     return None;
                 }
-                if i.address.starts_with('/') {
-                    return row.pointer(&i.address);
-                }
                 if !row.is_object() {
                     return Some(row);
                 }

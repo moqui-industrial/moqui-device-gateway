@@ -84,7 +84,7 @@ fn session(request: &PreparedDeviceRequest) -> Result<(AsyncClient, EventLoop), 
 fn topic(request: &PreparedDeviceRequest, item: Option<&Item>) -> Result<String, FieldbusError> {
     let topic = item
         .map(|i| i.address.as_str())
-        .filter(|s| !s.is_empty() && !s.starts_with('/'))
+        .filter(|s| !s.is_empty())
         .or(request.query.as_deref())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| FieldbusError::invalid("MQTT topic is required"))?;
