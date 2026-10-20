@@ -30,24 +30,26 @@ impl Default for ValueCodec {
         }
     }
 }
-fn checked(v: Option<Decimal>) -> Result<Decimal, FieldbusError> {
-    v.ok_or_else(|| FieldbusError::invalid("Numeric conversion overflow"))
+fn checked(v: Option<Decimal>) -> Result<Decimal, DeviceConnectorError> {
+    v.ok_or_else(|| DeviceConnectorError::invalid("Numeric conversion overflow"))
 }
-fn map(v: Decimal, a: Decimal, b: Decimal, c: Decimal, d: Decimal) -> Result<Decimal, FieldbusError> {
+fn map(v: Decimal, a: Decimal, b: Decimal, c: Decimal, d: Decimal) -> Result<Decimal, DeviceConnectorError> {
     checked(checked(v.checked_sub(a))?.checked_mul(checked(d.checked_sub(c))?))?
         .checked_div(checked(b.checked_sub(a))?)
         .and_then(|x| x.checked_add(c))
-        .ok_or_else(|| FieldbusError::invalid("Invalid numeric mapping range"))
+        .ok_or_else(|| DeviceConnectorError::invalid("Invalid numeric mapping range"))
 }
 impl ValueCodec {
-    pub fn validate(&self) -> Result<(), FieldbusError> {
+    pub fn validate(&self) -> Result<(), DeviceConnectorError> {
         if self.scale.is_zero() || self.tolerance < Decimal::ZERO || self.digits.is_some_and(|d| d > 28) {
-            return Err(FieldbusError::invalid("Invalid scale, tolerance or decimal precision"));
+            return Err(DeviceConnectorError::invalid(
+                "Invalid scale, tolerance or decimal precision",
+            ));
         }
         if self.physical_min.zip(self.physical_max).is_some_and(|(a, b)| a >= b)
             || self.logical_min.zip(self.logical_max).is_some_and(|(a, b)| a >= b)
         {
-            return Err(FieldbusError::invalid("Invalid minimum/maximum range"));
+            return Err(DeviceConnectorError::invalid("Invalid minimum/maximum range"));
         }
         Ok(())
     }
@@ -65,7 +67,7 @@ impl ValueCodec {
             n.round_dp_with_strategy(d, RoundingStrategy::MidpointAwayFromZero)
         })
     }
-    pub fn decode(&self, value: &FieldValue, kind: ParameterKind) -> Result<FieldValue, FieldbusError> {
+    pub fn decode(&self, value: &FieldValue, kind: ParameterKind) -> Result<FieldValue, DeviceConnectorError> {
         self.validate()?;
         match kind {
             ParameterKind::Numeric => {
@@ -81,7 +83,7 @@ impl ValueCodec {
             ParameterKind::Indicator => match value {
                 FieldValue::Bool(v) => Ok(FieldValue::Bool(*v ^ self.reverse_logic)),
                 FieldValue::Text(v) if v == "Y" || v == "N" => Ok(FieldValue::Bool((v == "Y") ^ self.reverse_logic)),
-                _ => Err(FieldbusError::invalid("Indicator requires BOOL or Y/N")),
+                _ => Err(DeviceConnectorError::invalid("Indicator requires BOOL or Y/N")),
             },
             ParameterKind::Bits => match value {
                 FieldValue::Unsigned(v) => Ok(FieldValue::Unsigned(*v)),
@@ -89,10 +91,11 @@ impl ValueCodec {
                 FieldValue::Text(s) => {
                     let s = s.strip_prefix("0b").unwrap_or(s).replace([' ', '_'], "");
                     Ok(FieldValue::Unsigned(
-                        u64::from_str_radix(&s, 2).map_err(|_| FieldbusError::invalid("Invalid binary string"))?,
+                        u64::from_str_radix(&s, 2)
+                            .map_err(|_| DeviceConnectorError::invalid("Invalid binary string"))?,
                     ))
                 }
-                _ => Err(FieldbusError::invalid("Bitset requires an unsigned value")),
+                _ => Err(DeviceConnectorError::invalid("Bitset requires an unsigned value")),
             },
             ParameterKind::Text => Ok(value.clone()),
         }
@@ -102,12 +105,14 @@ impl ValueCodec {
         value: &FieldValue,
         kind: ParameterKind,
         ty: PhysicalType,
-    ) -> Result<FieldValue, FieldbusError> {
+    ) -> Result<FieldValue, DeviceConnectorError> {
         self.validate()?;
         if kind == ParameterKind::Indicator {
             return match value {
                 FieldValue::Bool(v) => Ok(FieldValue::Bool(*v ^ self.reverse_logic)),
-                _ => Err(FieldbusError::invalid("Indicator requires a boolean logical value")),
+                _ => Err(DeviceConnectorError::invalid(
+                    "Indicator requires a boolean logical value",
+                )),
             };
         }
         if kind == ParameterKind::Text {
@@ -124,7 +129,7 @@ impl ValueCodec {
             }
             n = self.round(n);
         }
-        let invalid = || FieldbusError::invalid("Value is outside the physical type range");
+        let invalid = || DeviceConnectorError::invalid("Value is outside the physical type range");
         Ok(match ty {
             PhysicalType::U8 | PhysicalType::U16 | PhysicalType::U32 | PhysicalType::U64 => {
                 let max = match ty {
@@ -166,7 +171,7 @@ impl ValueCodec {
                 FieldValue::Float(if ty == PhysicalType::F32 { (v as f32) as f64 } else { v })
             }
             _ => {
-                return Err(FieldbusError::invalid(
+                return Err(DeviceConnectorError::invalid(
                     "Numeric mapping requires a numeric physical type",
                 ));
             }

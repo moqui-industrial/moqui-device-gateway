@@ -1,6 +1,6 @@
 #![cfg(feature = "modbus")]
 mod common;
-use moqui_fieldbus::{
+use moqui_device_connector::{
     backends::modbus::{Address, decode_words, encode_words},
     codec::ValueCodec,
     *,
@@ -74,7 +74,7 @@ async fn server(delay: Duration, write: bool) -> (String, tokio::task::JoinHandl
 async fn real_tcp_read_preserves_u64() {
     let (address, server) = server(Duration::ZERO, false).await;
     let r = Arc::new(common::request(Protocol::ModbusTcp, address, Operation::Read));
-    let facade = Arc::new(FieldbusFacade::new());
+    let facade = Arc::new(DeviceConnectorFacade::new());
     let mut out = RequestOutput::default();
     assert_eq!(
         facade
@@ -100,7 +100,7 @@ async fn real_tcp_write_waits_for_echo() {
         ..Default::default()
     };
     let mut out = RequestOutput::default();
-    let facade = Arc::new(FieldbusFacade::new());
+    let facade = Arc::new(DeviceConnectorFacade::new());
     assert_eq!(
         facade
             .execute(r.clone(), &input, &mut out, r.deadline(), None)
@@ -117,7 +117,7 @@ async fn write_timeout_is_uncertain_and_not_retried() {
     let mut r = common::request(Protocol::ModbusTcp, address, Operation::Write);
     r.items[0].address = "holding-register:2:UINT".into();
     r.items[0].physical_type = PhysicalType::U16;
-    let facade = Arc::new(FieldbusFacade::new());
+    let facade = Arc::new(DeviceConnectorFacade::new());
     let mut out = RequestOutput::default();
     let input = RequestInput {
         values: std::collections::BTreeMap::from([("test-param".into(), FieldValue::Unsigned(123))]),
@@ -150,7 +150,7 @@ async fn bulk_items_share_one_tcp_response() {
     second.bulk_index = Some(3);
     r.items.push(second);
     let r = Arc::new(r);
-    let f = Arc::new(FieldbusFacade::new());
+    let f = Arc::new(DeviceConnectorFacade::new());
     let mut out = RequestOutput::default();
     assert_eq!(
         f.execute(r.clone(), &RequestInput::default(), &mut out, r.deadline(), None)

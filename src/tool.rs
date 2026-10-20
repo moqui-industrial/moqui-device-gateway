@@ -1,6 +1,6 @@
 //! Factory lifecycle owns the I/O runtime and a bounded persistence queue.
 use crate::{
-    client::{FieldbusFacade, SampleSink},
+    client::{DeviceConnectorFacade, SampleSink},
     model::*,
 };
 use moqui_core::{
@@ -18,12 +18,12 @@ use std::{
     time::Duration,
 };
 #[derive(Default)]
-pub struct FieldbusToolFactory {
+pub struct DeviceConnectorToolFactory {
     state: Mutex<Option<Arc<State>>>,
 }
 pub(crate) struct State {
     pub runtime: tokio::runtime::Runtime,
-    pub facade: Arc<FieldbusFacade>,
+    pub facade: Arc<DeviceConnectorFacade>,
     pub sink: Arc<QueueSink>,
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -32,51 +32,51 @@ pub(crate) struct QueueSink {
     sender: mpsc::SyncSender<SampleBatch>,
 }
 impl SampleSink for QueueSink {
-    fn emit(&self, batch: SampleBatch) -> Result<(), FieldbusError> {
+    fn emit(&self, batch: SampleBatch) -> Result<(), DeviceConnectorError> {
         self.sender.try_send(batch).map_err(|e| match e {
-            mpsc::TrySendError::Full(_) => FieldbusError::new(
+            mpsc::TrySendError::Full(_) => DeviceConnectorError::new(
                 ErrorKind::Busy,
-                "Fieldbus persistence queue is full; sample was not saved",
+                "Device connector persistence queue is full; sample was not saved",
             ),
             mpsc::TrySendError::Disconnected(_) => {
-                FieldbusError::new(ErrorKind::Closed, "Fieldbus persistence worker is closed")
+                DeviceConnectorError::new(ErrorKind::Closed, "Device connector persistence worker is closed")
             }
         })
     }
 }
-impl FieldbusToolFactory {
+impl DeviceConnectorToolFactory {
     pub(crate) fn state(&self) -> Result<Arc<State>, Error> {
         self.state
             .lock()
-            .map_err(|_| Error::new("Fieldbus factory lock poisoned"))?
+            .map_err(|_| Error::new("Device connector factory lock poisoned"))?
             .clone()
-            .ok_or_else(|| Error::new("Fieldbus factory is not initialized"))
+            .ok_or_else(|| Error::new("Device connector factory is not initialized"))
     }
     /// Resolve once during setup. The returned API needs no ExecutionContext.
-    pub fn facade(&self) -> Result<Arc<FieldbusFacade>, Error> {
+    pub fn facade(&self) -> Result<Arc<DeviceConnectorFacade>, Error> {
         Ok(self.state()?.facade.clone())
     }
 }
-struct FieldbusTool {
-    pub _facade: Arc<FieldbusFacade>,
+struct DeviceConnectorTool {
+    pub _facade: Arc<DeviceConnectorFacade>,
 }
-impl Tool for FieldbusTool {}
-impl ToolFactory for FieldbusToolFactory {
+impl Tool for DeviceConnectorTool {}
+impl ToolFactory for DeviceConnectorToolFactory {
     fn name(&self) -> &str {
-        "Fieldbus"
+        "DeviceConnector"
     }
     fn init(&self, factory: &Arc<ExecutionContextFactory>) -> Result<(), Error> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| Error::new("Fieldbus factory lock poisoned"))?;
+            .map_err(|_| Error::new("Device connector factory lock poisoned"))?;
         if state.is_some() {
             return Ok(());
         }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
-            .thread_name("fieldbus-io")
+            .thread_name("device-connector-io")
             .build()
             .map_err(|e| Error::new(e.to_string()))?;
         let (sender, receiver) = mpsc::sync_channel::<SampleBatch>(1024);
@@ -84,12 +84,12 @@ impl ToolFactory for FieldbusToolFactory {
         let stopped = stop.clone();
         let factory = Arc::downgrade(factory);
         let worker = std::thread::Builder::new()
-            .name("fieldbus-store".into())
+            .name("device-connector-store".into())
             .spawn(move || persist_loop(factory, receiver, stopped))
             .map_err(|e| Error::new(e.to_string()))?;
         *state = Some(Arc::new(State {
             runtime,
-            facade: Arc::new(FieldbusFacade::new()),
+            facade: Arc::new(DeviceConnectorFacade::new()),
             sink: Arc::new(QueueSink { sender }),
             stop,
             worker: Mutex::new(Some(worker)),
@@ -97,7 +97,7 @@ impl ToolFactory for FieldbusToolFactory {
         Ok(())
     }
     fn get_instance(&self, _: &[Value]) -> Result<Arc<dyn Tool>, Error> {
-        Ok(Arc::new(FieldbusTool {
+        Ok(Arc::new(DeviceConnectorTool {
             _facade: self.facade()?,
         }))
     }
@@ -110,7 +110,7 @@ impl ToolFactory for FieldbusToolFactory {
                 && let Some(w) = w.take()
                 && w.join().is_err()
             {
-                tracing::error!("Fieldbus persistence worker panicked");
+                tracing::error!("Device connector persistence worker panicked");
             }
         }
     }
@@ -126,7 +126,7 @@ fn persist_loop(factory: Weak<ExecutionContextFactory>, receiver: mpsc::Receiver
                 let _entered = ec.enter();
                 let _auth = ec.disable_authz();
                 if let Err(error) = crate::binding::persist_batch(&ec, &batch) {
-                    tracing::error!(request=%batch.request_name,error=%error,"Fieldbus samples were not saved");
+                    tracing::error!(request=%batch.request_name,error=%error,"Device connector samples were not saved");
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => break,

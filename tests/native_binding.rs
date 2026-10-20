@@ -5,7 +5,7 @@ use moqui_core::{
     entity::{EntityFacade, EntityGroup},
     transaction::{PoolConfig, TransactionManager},
 };
-use moqui_fieldbus::FieldbusToolFactory;
+use moqui_device_connector::DeviceConnectorToolFactory;
 use moqui_lib::error::Error;
 use std::{path::Path, sync::Arc};
 struct NoDb;
@@ -19,13 +19,13 @@ fn native_registration_interface_and_factory_lifecycle() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let framework = root.join("framework");
-    let component = root.join("component/moqui-fieldbus");
+    let component = root.join("component/moqui-device-connector");
     let device = root.join("component/moqui-device");
     std::fs::create_dir_all(framework.join("conf")).unwrap();
-    std::fs::create_dir_all(component.join("service/moqui/fieldbus")).unwrap();
+    std::fs::create_dir_all(component.join("service/moqui/device/connector")).unwrap();
     std::fs::create_dir_all(device.join("service/moqui/device")).unwrap();
     std::fs::write(framework.join("component.xml"), "<component name=\"framework\"/>").unwrap();
-    std::fs::write(framework.join("conf/MoquiDefaultConf.xml"),"<moqui-conf><component-list><component-dir location=\"component\"/></component-list><service-facade><service-file location=\"component://moqui-device/service/moqui/device/DeviceServices.xml\"/><service-file location=\"component://moqui-fieldbus/service/moqui/fieldbus/FieldbusServices.xml\"/></service-facade></moqui-conf>").unwrap();
+    std::fs::write(framework.join("conf/MoquiDefaultConf.xml"),"<moqui-conf><component-list><component-dir location=\"component\"/></component-list><service-facade><service-file location=\"component://moqui-device/service/moqui/device/DeviceServices.xml\"/><service-file location=\"component://moqui-device-connector/service/moqui/device/connector/DeviceConnectorServices.xml\"/></service-facade></moqui-conf>").unwrap();
     std::fs::write(device.join("component.xml"), "<component name=\"moqui-device\"/>").unwrap();
     std::fs::write(component.join("component.xml"), include_str!("../component.xml")).unwrap();
     std::fs::write(component.join("MoquiConf.xml"), include_str!("../MoquiConf.xml")).unwrap();
@@ -43,8 +43,8 @@ fn native_registration_interface_and_factory_lifecycle() {
     )
     .unwrap();
     std::fs::write(
-        component.join("service/moqui/fieldbus/FieldbusServices.xml"),
-        include_str!("../service/moqui/fieldbus/FieldbusServices.xml"),
+        component.join("service/moqui/device/connector/DeviceConnectorServices.xml"),
+        include_str!("../service/moqui/device/connector/DeviceConnectorServices.xml"),
     )
     .unwrap();
     let factory = ExecutionContextFactory::boot_with_options(
@@ -74,7 +74,7 @@ fn native_registration_interface_and_factory_lifecycle() {
     factory.init_tools().unwrap();
     factory.init_tools().unwrap();
     let tool = factory
-        .get_tool_factory_typed::<FieldbusToolFactory>("Fieldbus")
+        .get_tool_factory_typed::<DeviceConnectorToolFactory>("DeviceConnector")
         .expect("native factory");
     assert!(tool.facade().is_ok());
     let ec = factory.new_context();

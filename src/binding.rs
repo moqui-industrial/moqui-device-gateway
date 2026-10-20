@@ -1,5 +1,5 @@
 //! Moqui-specific preparation and persistence. No facade is passed into transport code.
-use crate::{codec::ValueCodec, model::*, tool::FieldbusToolFactory};
+use crate::{codec::ValueCodec, model::*, tool::DeviceConnectorToolFactory};
 use moqui_core::{
     context::ExecutionContext,
     entity::{EntityFacade, EntityValue},
@@ -220,7 +220,9 @@ pub fn prepare(
     let r = entity(params, "request")?;
     let ef = facade(ec)?;
     if ef.sim_active() {
-        return Err(Error::new("Fieldbus network I/O is disabled in simulation mode"));
+        return Err(Error::new(
+            "Device connector network I/O is disabled in simulation mode",
+        ));
     }
     let device_id = text(&r, "deviceId").ok_or_else(|| Error::new("Request has no deviceId"))?;
     let device = entity(params, "device")?;
@@ -371,14 +373,14 @@ pub fn prepare(
 pub fn run_request(ec: &ExecutionContext, _: &ServiceInfo<'_>, params: &Parameters) -> Result<Parameters, Error> {
     if tokio::runtime::Handle::try_current().is_ok() {
         return Err(Error::new(
-            "Invoke the Moqui service on a service worker; async Rust callers should use FieldbusFacade directly",
+            "Invoke the Moqui service on a service worker; async Rust callers should use DeviceConnectorFacade directly",
         ));
     }
     let (request, input) = prepare(ec, params)?;
     let factory = ec
         .factory()
-        .get_tool_factory_typed::<FieldbusToolFactory>("Fieldbus")
-        .ok_or_else(|| Error::new("Fieldbus ToolFactory is not installed"))?;
+        .get_tool_factory_typed::<DeviceConnectorToolFactory>("DeviceConnector")
+        .ok_or_else(|| Error::new("Device connector ToolFactory is not installed"))?;
     let state = factory.state().map_err(error)?;
     let mut output = RequestOutput::default();
     let execution = state.runtime.block_on(state.facade.execute(

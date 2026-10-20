@@ -14,7 +14,7 @@ Source references used for the initial implementation:
 
 | Original route/responsibility | Current implementation | Migration state |
 | --- | --- | --- |
-| dispatch-device-request | FieldbusFacade + Moqui service binding | native request selection; no route interpreter |
+| dispatch-device-request | DeviceConnectorFacade + Moqui service binding | native request selection; no route interpreter |
 | mqtt-read-device-request-consumer, mqtt-read-device-request | MQTT backend and JSON normalization | supported JSON scalar/object/list reads; not arbitrary Camel transforms |
 | opcua-read-device-request-consumer, opcua-read-device-request | OPC UA backend | typed reads, monitored items and polling |
 | store-device-request-inbound | binding persistence | Entity Engine; scoped existing identities |
@@ -85,5 +85,5 @@ services, not to a protocol backend. Keep these selectors on the Entity Engine.
    gateway-specific service implementations.
 
 GenICam remains a separate camera implementation of DeviceRequestInternal.
-This initial fieldbus component does not depend on its HTTP streaming changes
+This initial device connector component does not depend on its HTTP streaming changes
 and does not replace the camera/Content pipeline.

@@ -1,6 +1,6 @@
 #![cfg(feature = "mqtt")]
 mod common;
-use moqui_fieldbus::*;
+use moqui_device_connector::*;
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -92,7 +92,7 @@ fn request(endpoint: String, operation: Operation) -> Arc<PreparedDeviceRequest>
 async fn qos1_publication_preserves_gateway_envelope() {
     let (ep, server) = broker(true, false).await;
     let r = request(ep, Operation::Write);
-    let f = Arc::new(FieldbusFacade::new());
+    let f = Arc::new(DeviceConnectorFacade::new());
     let input = RequestInput {
         values: std::collections::BTreeMap::from([("test-param".into(), FieldValue::Unsigned(u64::MAX))]),
         ..Default::default()
@@ -111,7 +111,7 @@ async fn qos1_publication_preserves_gateway_envelope() {
 async fn rejected_puback_cannot_report_success() {
     let (ep, server) = broker(true, true).await;
     let r = request(ep, Operation::Write);
-    let f = Arc::new(FieldbusFacade::new());
+    let f = Arc::new(DeviceConnectorFacade::new());
     let input = RequestInput {
         values: std::collections::BTreeMap::from([("test-param".into(), FieldValue::Unsigned(u64::MAX))]),
         ..Default::default()
@@ -131,7 +131,7 @@ async fn rejected_puback_cannot_report_success() {
 async fn read_handles_retained_message_before_suback() {
     let (ep, server) = broker(false, false).await;
     let r = request(ep, Operation::Read);
-    let f = Arc::new(FieldbusFacade::new());
+    let f = Arc::new(DeviceConnectorFacade::new());
     let mut out = RequestOutput::default();
     assert_eq!(
         f.execute(r.clone(), &RequestInput::default(), &mut out, r.deadline(), None)

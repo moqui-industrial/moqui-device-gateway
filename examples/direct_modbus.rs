@@ -1,5 +1,5 @@
 //! Run with: cargo run --example direct_modbus --no-default-features --features modbus -- 127.0.0.1:502
-use moqui_fieldbus::{codec::ValueCodec, *};
+use moqui_device_connector::{codec::ValueCodec, *};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         plc_log: false,
         only_changed: false,
     });
-    let facade = Arc::new(FieldbusFacade::new());
+    let facade = Arc::new(DeviceConnectorFacade::new());
     let mut output = RequestOutput::default();
     let result = facade
         .execute(

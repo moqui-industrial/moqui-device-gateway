@@ -21,7 +21,7 @@ pub enum FieldValue {
     Record(BTreeMap<String, FieldValue>),
 }
 impl FieldValue {
-    pub fn decimal(&self) -> Result<Decimal, FieldbusError> {
+    pub fn decimal(&self) -> Result<Decimal, DeviceConnectorError> {
         match self {
             Self::Signed(v) => Ok(Decimal::from(*v)),
             Self::Unsigned(v) => Ok(Decimal::from(*v)),
@@ -29,8 +29,8 @@ impl FieldValue {
             Self::Float(v) if v.is_finite() => v
                 .to_string()
                 .parse()
-                .map_err(|_| FieldbusError::invalid("Numeric value is out of decimal range")),
-            _ => Err(FieldbusError::invalid("A finite numeric value is required")),
+                .map_err(|_| DeviceConnectorError::invalid("Numeric value is out of decimal range")),
+            _ => Err(DeviceConnectorError::invalid("A finite numeric value is required")),
         }
     }
 }
@@ -51,15 +51,15 @@ pub enum PhysicalType {
     Bytes,
 }
 impl PhysicalType {
-    pub fn registers(self) -> Result<u16, FieldbusError> {
+    pub fn registers(self) -> Result<u16, DeviceConnectorError> {
         match self {
             Self::U8 | Self::I8 | Self::U16 | Self::I16 => Ok(1),
             Self::U32 | Self::I32 | Self::F32 => Ok(2),
             Self::U64 | Self::I64 | Self::F64 => Ok(4),
-            _ => Err(FieldbusError::unsupported("Type is not a Modbus register type")),
+            _ => Err(DeviceConnectorError::unsupported("Type is not a Modbus register type")),
         }
     }
-    pub fn parse(value: &str) -> Result<Self, FieldbusError> {
+    pub fn parse(value: &str) -> Result<Self, DeviceConnectorError> {
         Ok(match value.to_ascii_uppercase().as_str() {
             "BOOL" | "DRITBOOL" => Self::Bool,
             "BYTE" | "USINT" | "DRITUSINT" | "DRITBYTE" => Self::U8,
@@ -74,7 +74,7 @@ impl PhysicalType {
             "LREAL" | "DRITLREAL" => Self::F64,
             "STRING" | "DRITSTRING" | "TEXT" => Self::Text,
             "BYTES" => Self::Bytes,
-            _ => return Err(FieldbusError::unsupported("Unknown physical item type")),
+            _ => return Err(DeviceConnectorError::unsupported("Unknown physical item type")),
         })
     }
 }
@@ -88,7 +88,7 @@ pub enum Operation {
     Transfer,
 }
 impl Operation {
-    pub fn from_enum(value: &str) -> Result<Self, FieldbusError> {
+    pub fn from_enum(value: &str) -> Result<Self, DeviceConnectorError> {
         Ok(match value {
             "DrtRead" => Self::Read,
             "DrtWrite" | "DrtConfigWrite" => Self::Write,
@@ -96,7 +96,7 @@ impl Operation {
             "DrtCyclic" => Self::Poll,
             "DrtUnsubscribe" => Self::Unsubscribe,
             "DrtContentTransfer" => Self::Transfer,
-            _ => return Err(FieldbusError::unsupported("Unsupported DeviceRequest type")),
+            _ => return Err(DeviceConnectorError::unsupported("Unsupported DeviceRequest type")),
         })
     }
 }
@@ -182,30 +182,32 @@ pub struct PreparedDeviceRequest {
     pub only_changed: bool,
 }
 impl PreparedDeviceRequest {
-    pub fn validate(&self) -> Result<(), FieldbusError> {
+    pub fn validate(&self) -> Result<(), DeviceConnectorError> {
         if self.name.is_empty() || self.device_id.is_empty() || self.connection.endpoint.is_empty() {
-            return Err(FieldbusError::invalid("Request, device and endpoint are required"));
+            return Err(DeviceConnectorError::invalid(
+                "Request, device and endpoint are required",
+            ));
         }
         if self.timeout.is_zero()
             || self.timeout > Duration::from_secs(86400)
             || self.polling_interval.is_zero()
             || self.polling_interval > Duration::from_secs(86400)
         {
-            return Err(FieldbusError::invalid(
+            return Err(DeviceConnectorError::invalid(
                 "Timeout and polling interval must be positive milliseconds",
             ));
         }
         let mut ids = std::collections::HashSet::new();
         for item in &self.items {
             if item.parameter_id.is_empty() || !ids.insert(&item.parameter_id) {
-                return Err(FieldbusError::invalid(
+                return Err(DeviceConnectorError::invalid(
                     "Item parameter identities must be non-empty and unique",
                 ));
             }
             item.codec.validate()?;
         }
         if self.operation == Operation::Unsubscribe && self.parent_request.as_deref().is_none_or(str::is_empty) {
-            return Err(FieldbusError::invalid("Unsubscribe requires parentRequestName"));
+            return Err(DeviceConnectorError::invalid("Unsubscribe requires parentRequestName"));
         }
         Ok(())
     }
@@ -251,7 +253,7 @@ impl ItemResult {
             source_time: None,
         }
     }
-    pub fn error(id: &str, error: FieldbusError) -> Self {
+    pub fn error(id: &str, error: DeviceConnectorError) -> Self {
         Self {
             parameter_id: id.into(),
             value: None,
@@ -334,12 +336,12 @@ pub enum ErrorKind {
     Closed,
 }
 #[derive(Clone, Debug)]
-pub struct FieldbusError {
+pub struct DeviceConnectorError {
     pub kind: ErrorKind,
     pub message: String,
     pub may_have_applied: bool,
 }
-impl FieldbusError {
+impl DeviceConnectorError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
@@ -368,12 +370,12 @@ impl FieldbusError {
         self
     }
 }
-impl fmt::Display for FieldbusError {
+impl fmt::Display for DeviceConnectorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.message)
     }
 }
-impl std::error::Error for FieldbusError {}
+impl std::error::Error for DeviceConnectorError {}
 #[derive(Clone, Debug)]
 pub enum LogValueKind {
     Numeric,

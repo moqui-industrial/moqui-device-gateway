@@ -1,5 +1,5 @@
 mod common;
-use moqui_fieldbus::*;
+use moqui_device_connector::*;
 use std::sync::Arc;
 #[tokio::test]
 async fn binary_file_transfer_and_path_rejection() {
@@ -9,7 +9,7 @@ async fn binary_file_transfer_and_path_rejection() {
         format!("file:{}", dir.path().display()),
         Operation::Transfer,
     ));
-    let f = Arc::new(FieldbusFacade::new());
+    let f = Arc::new(DeviceConnectorFacade::new());
     let mut out = RequestOutput::default();
     let mut input = RequestInput {
         files: vec![TransferFile {

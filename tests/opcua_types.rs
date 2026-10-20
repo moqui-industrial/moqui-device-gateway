@@ -1,6 +1,6 @@
 #![cfg(feature = "opcua")]
 mod common;
-use moqui_fieldbus::{
+use moqui_device_connector::{
     backends::opcua::{OpcUaClient, from_variant, node_id, to_variant},
     *,
 };
