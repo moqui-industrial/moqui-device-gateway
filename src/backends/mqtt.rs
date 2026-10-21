@@ -336,7 +336,7 @@ impl DeviceClient for MqttDeviceClient {
             loop {
                 tokio::select! {biased;_=cancel.cancelled()=>break,event=events.poll()=>match event{
                 Ok(Event::Incoming(Packet::Publish(p)))=>if let Err(error)=emit(&r,&String::from_utf8_lossy(&p.topic),&p.payload,sink.as_ref()){tracing::error!(request=%r.name,error=%error,"MQTT sample rejected");},
-                Ok(_)=>{},Err(_)=>{tracing::error!(request=%r.name,"MQTT subscription disconnected; request must be restarted");break;}}}
+                Ok(_)=>{},Err(_)=>{tracing::error!(request=%r.name,"MQTT subscription disconnected; start#Subscriptions restarts it within a minute");break;}}}
             }
         }))
     }

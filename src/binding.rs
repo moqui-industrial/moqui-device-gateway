@@ -232,6 +232,16 @@ fn kind(ef: &EntityFacade, def: &EntityValue) -> Result<ParameterKind, Error> {
         }
     })
 }
+/// The physical type of an item without itemTypeEnumId, from the kind of its parameter: what a JSON (MQTT) value
+/// carries. Set itemTypeEnumId for an exact register or PLC type.
+fn default_physical_type(kind: ParameterKind) -> PhysicalType {
+    match kind {
+        ParameterKind::Numeric => PhysicalType::F64,
+        ParameterKind::Indicator => PhysicalType::Bool,
+        ParameterKind::Bits => PhysicalType::U64,
+        ParameterKind::Text => PhysicalType::Text,
+    }
+}
 fn logical_value(parameter: &EntityValue, kind: ParameterKind) -> Result<FieldValue, Error> {
     Ok(match kind {
         ParameterKind::Numeric => FieldValue::Decimal(
@@ -371,8 +381,10 @@ pub fn prepare(
                 true,
             )?;
             let kind = kind(&ef, &def)?;
-            let ty =
-                PhysicalType::parse(&text(&i, "itemTypeEnumId").unwrap_or_else(|| "STRING".into())).map_err(error)?;
+            let ty = match text(&i, "itemTypeEnumId") {
+                Some(t) => PhysicalType::parse(&t).map_err(error)?,
+                None => default_physical_type(kind),
+            };
             let digits = decimal(&i, "significantDigits")?
                 .map(|d| u32::try_from(d).map_err(error))
                 .transpose()?;
@@ -665,8 +677,10 @@ fn store_policy(ef: &EntityFacade, request_name: &str, parameter_id: &str) -> Re
         .use_cache(true)
         .one()?
         .map(|i| {
-            let physical_type =
-                PhysicalType::parse(&text(&i, "itemTypeEnumId").unwrap_or_else(|| "STRING".into())).map_err(error)?;
+            let physical_type = match text(&i, "itemTypeEnumId") {
+                Some(t) => PhysicalType::parse(&t).map_err(error)?,
+                None => PhysicalType::U64,
+            };
             Ok(StorePolicy {
                 allow_duplicate: text(&i, "allowDuplicate").as_deref() == Some("Y"),
                 tolerance: decimal(&i, "tolerance")?.unwrap_or(Decimal::ZERO),

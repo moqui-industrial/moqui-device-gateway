@@ -69,6 +69,15 @@ cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
+The component specs (`test/DeviceGateway.spec.js`) run inside MR-Moqui with the
+data of moqui-device: `./moq test moqui-device-gateway` from the framework root.
+The MQTT features also need an MQTT 5 broker on 127.0.0.1:1883 with user
+`artemis`/`artemis` (the RMQTT or Artemis compose of moqui-deploy):
+
+```sh
+MQTT_USERNAME=artemis MQTT_PASSWORD=artemis gateway_mqtt_test=1 ./moq test moqui-device-gateway
+```
+
 For a smaller transport-only build, use
 `cargo test --locked --no-default-features --features modbus,mqtt`.
 Cargo still resolves optional local framework manifests, so keep the component
@@ -85,10 +94,25 @@ these checks prove and which deployment checks remain necessary.
 | Local directory | no | no | binary transfer, temporary file followed by rename |
 | SFTP | no | no | binary transfer, pinned SSH host key, password or private key |
 
-PROFINET, EtherNet/IP, Modbus TLS, browse/discovery and structured OPC UA
-values are not yet implemented. They return unsupported errors where applicable;
-there is no fallback protocol. The complete migration checklist is in
-[compatibility](docs/compatibility.md).
+Browse/discovery, structured OPC UA values and Modbus TLS are not implemented.
+An unsupported request returns an error; there is no fallback protocol. The
+complete migration checklist is in [compatibility](docs/compatibility.md).
+
+### PROFINET, EtherNet/IP and EtherCAT
+
+These fieldbuses are deliberately not part of the component. On them the PLC owns
+the drives and the cyclic I/O, and the parameters of an inverter or servo drive
+are reached through acyclic services (PROFINET record data and PROFIdrive
+parameter access, CIP explicit messages); EtherCAT has a single master, the PLC.
+The Rust libraries reviewed in October 2026 do not fit this use: the PROFINET
+controller stacks are GPL-3.0 (they cannot be linked into the CC0 binary) or
+device-side only, and the maintained EtherNet/IP crate targets Logix tags, with
+generic CIP access only as raw requests.
+
+Read and write drive parameters through the PLC instead: the CODESYS or TIA
+Portal parameter-access blocks of the drive, exposed to Moqui through OPC UA or
+MQTT, which this component supports. Commissioning stays with the engineering
+tools (TIA Portal/Startdrive, CODESYS, the drive vendor's software).
 
 ## One API, two callers
 
@@ -129,6 +153,11 @@ service path as deterministic merely because it is written in Rust.
   `private-key-file` names an unencrypted private key file. The remote directory
   must exist. SFTP writes can leave a partial file on failure; delivery is not
   atomic as it is for a local rename.
+
+An item without `itemTypeEnumId` gets its physical type from the kind of its
+parameter: a decimal number as a 64-bit float, an indicator as a boolean, a bit
+set as 64 bits, text as text. That fits JSON over MQTT; set `itemTypeEnumId` for
+an exact register or PLC type.
 
 Options accept query-string or JSON string-map syntax. `usernameEnv` and
 `passwordEnv` resolve credentials during Moqui preparation. Legacy literal

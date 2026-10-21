@@ -37,3 +37,9 @@ Clippy passed for all targets with warnings denied, against mr-moqui master
 9fe4b939 and Rust 1.99.1. The framework APIs the component uses (service calls,
 message facade error marks, JSON conversion) are unchanged at the CI revision
 ed07b11.
+
+Component specs (2026-10-21): `./moq test moqui-device moqui-device-gateway` with
+`gateway_mqtt_test=1` passed 18 of 18 active features against a local Artemis
+broker, among them the HVAC demo end to end: 20 live parameters published by
+`HVAC_DEMO_LiveParametersWrite`, the PLC log subscription started, and a
+ParameterLogger event stored as a ParameterLog row.

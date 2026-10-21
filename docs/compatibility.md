@@ -80,9 +80,11 @@ a protocol backend. Keep these selectors on the Entity Engine.
    start#Subscriptions restarts a lost one within a minute); never automatically
    replay a command write.
 6. Validate pinned-host SFTP and secured OPC UA against real servers/devices.
-7. Select proven PROFINET Supervisor and EtherNet/IP explicit-message stacks.
-   Keep cyclic I/O controller ownership and safety PLC control outside this
-   initial implementation. Modbus TLS needs its own verified transport adapter.
+7. PROFINET, EtherNet/IP and EtherCAT are not added (decision of 2026-10-21):
+   drive parameters are read and written through the PLC, which owns the
+   drives, and exposed over OPC UA or MQTT; see the README. Cyclic I/O and
+   safety PLC control stay outside this component. Modbus TLS needs its own
+   verified transport adapter.
 8. Only after parity gates pass, migrate installations and remove obsolete
    gateway-specific service implementations.
 

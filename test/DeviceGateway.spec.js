@@ -1,7 +1,8 @@
 // moqui-device-gateway inside MR-Moqui, with moqui-math and moqui-device installed. From the framework root:
 //     ./moq test --debug moqui-device-gateway
-// The requests are those of moqui-device's DeviceTestData.xml. The MQTT features need an MQTT 5 broker on
-// 127.0.0.1:1883 accepting user artemis/artemis, and gateway_mqtt_test=1 (see test/README.md).
+// The requests are those of moqui-device's DeviceTestData.xml and HVAC demo data. The MQTT features need an MQTT 5
+// broker on 127.0.0.1:1883 accepting user artemis/artemis, gateway_mqtt_test=1, and for the HVAC demo
+// MQTT_USERNAME=artemis MQTT_PASSWORD=artemis in the environment (HVACDemoGatewayData.xml reads them).
 spec({
     setup() { ec.artifactExecution.disableAuthz(); },
     cleanup() { ec.artifactExecution.enableAuthz(); },
@@ -173,5 +174,44 @@ feature("an MQTT subscription starts once and stops on unsubscribe", {
         out.stopped.status == "completed";
         !out.after.activeRequestNames.includes("TestPlcMqttSubscribeReq01");
         !out.after.droppedRequestNames.includes("TestPlcMqttSubscribeReq01");
+    },
+});
+
+feature("the HVAC demo publishes the live parameters and stores the PLC log", {
+    ignore: !System.getProperty("gateway_mqtt_test"),
+    when() {
+        call("update#moqui.device.DeviceRequest", {requestName: "HVAC_DEMO_LiveParametersWrite", onlyChangedParameters: "N"});
+        const write = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "HVAC_DEMO_LiveParametersWrite"});
+        const subscription = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "HVAC_DEMO_PlcLogSubscribe"});
+        // what the CODESYS ParameterLogger publishes, sent here by an MQTT write without items
+        call("store#moqui.device.DeviceRequest", {requestName: "GatewayTestPlcLogPublish", deviceId: "HVAC_DEMO_PLC",
+            requestTypeEnumId: "DrtWrite", routerEnumId: "DrrMQTTBroker",
+            runServiceName: "moqui.device.gateway.MqttServices.run#DeviceRequest", connectionName: "HVAC_DEMO_MQTT",
+            query: "moqui-plc", timeout: 5000});
+        const count = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "HvacTempSetpoint").count();
+        const before = count();
+        const publish = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPlcLogPublish",
+            payload: {loggerName: "HVAC_DEMO_PLC", source: "HvacTempSetpoint", type: 1, numericValue: 21.5,
+                logEventDate: "2026-10-21T10:00:00Z"}});
+        let after = before;
+        const started = Date.now();
+        while (after === before && Date.now() - started < 8000) after = count();
+        call("store#moqui.device.DeviceRequest", {requestName: "GatewayTestPlcLogUnsubscribe", deviceId: "HVAC_DEMO_PLC",
+            parentRequestName: "HVAC_DEMO_PlcLogSubscribe", requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker",
+            runServiceName: "moqui.device.gateway.PlcLogServices.run#DeviceRequest"});
+        call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPlcLogUnsubscribe"});
+        return {write, subscription, publish, stored: after - before};
+    },
+    then(out) {
+        out.write.status == "completed";
+        out.write.itemResults.length == 20;
+        out.subscription.status == "active";
+        out.publish.status == "completed";
+        out.stored == 1;
+    },
+    cleanup() {
+        call("delete#moqui.device.DeviceRequest", {requestName: "GatewayTestPlcLogPublish"});
+        call("delete#moqui.device.DeviceRequest", {requestName: "GatewayTestPlcLogUnsubscribe"});
+        call("update#moqui.device.DeviceRequest", {requestName: "HVAC_DEMO_LiveParametersWrite", onlyChangedParameters: "Y"});
     },
 });
