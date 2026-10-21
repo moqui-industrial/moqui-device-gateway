@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <moqui-conf>
-    <tools><tool-factory class="moqui_device_connector::DeviceConnectorToolFactory" init-priority="30"/></tools>
+    <tools><tool-factory class="moqui_device_gateway::DeviceGatewayToolFactory" init-priority="30"/></tools>
 </moqui-conf>

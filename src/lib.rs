@@ -9,10 +9,10 @@ pub mod payload;
 #[cfg(feature = "moqui")]
 pub mod tool;
 
-pub use client::{DeviceConnectorClient, DeviceConnectorFacade, SampleSink};
+pub use client::{DeviceGatewayClient, DeviceGatewayFacade, SampleSink};
 pub use model::*;
 #[cfg(feature = "moqui")]
-pub use tool::DeviceConnectorToolFactory;
+pub use tool::DeviceGatewayToolFactory;
 
 #[cfg(feature = "moqui")]
 mod native {
@@ -20,13 +20,13 @@ mod native {
         context::Error,
         native::{NativeComponent, NativeRegistry, submit_component},
     };
-    submit_component! { NativeComponent { name: "moqui-device-connector", register } }
+    submit_component! { NativeComponent { name: "moqui-device-gateway", register } }
     fn register(registry: &mut NativeRegistry) -> Result<(), Error> {
-        registry.tool("moqui_device_connector::DeviceConnectorToolFactory", || {
-            std::sync::Arc::new(crate::tool::DeviceConnectorToolFactory::default())
+        registry.tool("moqui_device_gateway::DeviceGatewayToolFactory", || {
+            std::sync::Arc::new(crate::tool::DeviceGatewayToolFactory::default())
         })?;
         registry.service_function(
-            "moqui_device_connector::binding::run_request",
+            "moqui_device_gateway::binding::run_request",
             crate::binding::run_request,
         )
     }

@@ -1,6 +1,6 @@
 //! MQTT 5: success means PUBACK/SUBACK, not merely enqueueing a command.
 use crate::{
-    client::{DeviceConnectorClient, SampleSink},
+    client::{DeviceGatewayClient, SampleSink},
     model::*,
     payload,
 };
@@ -27,23 +27,23 @@ use tokio_util::sync::CancellationToken;
 #[derive(Default)]
 pub struct MqttClient;
 static NEXT_CLIENT: AtomicU64 = AtomicU64::new(1);
-fn session(request: &PreparedDeviceRequest) -> Result<(AsyncClient, EventLoop), DeviceConnectorError> {
+fn session(request: &PreparedDeviceRequest) -> Result<(AsyncClient, EventLoop), DeviceGatewayError> {
     let c = &request.connection;
     let url = url::Url::parse(&c.endpoint)
-        .map_err(|_| DeviceConnectorError::invalid("MQTT endpoint must be mqtt:// or mqtts://"))?;
+        .map_err(|_| DeviceGatewayError::invalid("MQTT endpoint must be mqtt:// or mqtts://"))?;
     if !matches!(url.scheme(), "mqtt" | "mqtts")
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
         || !matches!(url.path(), "" | "/")
     {
-        return Err(DeviceConnectorError::invalid(
+        return Err(DeviceGatewayError::invalid(
             "Use a broker URL without credentials, topic, or query; configure options separately",
         ));
     }
     for key in c.options.keys() {
         if !matches!(key.as_str(), "client-id-prefix" | "keep-alive-seconds" | "retain") {
-            return Err(DeviceConnectorError::unsupported(format!("Unknown MQTT option: {key}")));
+            return Err(DeviceGatewayError::unsupported(format!("Unknown MQTT option: {key}")));
         }
     }
     let id = format!(
@@ -51,14 +51,14 @@ fn session(request: &PreparedDeviceRequest) -> Result<(AsyncClient, EventLoop), 
         c.options
             .get("client-id-prefix")
             .map(String::as_str)
-            .unwrap_or("moqui-device-connector"),
+            .unwrap_or("moqui-device-gateway"),
         std::process::id(),
         NEXT_CLIENT.fetch_add(1, Ordering::Relaxed)
     );
     let mut options = MqttOptions::new(
         id,
         url.host_str()
-            .ok_or_else(|| DeviceConnectorError::invalid("Missing MQTT host"))?,
+            .ok_or_else(|| DeviceGatewayError::invalid("Missing MQTT host"))?,
         url.port().unwrap_or(if url.scheme() == "mqtts" { 8883 } else { 1883 }),
     );
     if url.scheme() == "mqtts" {
@@ -69,10 +69,10 @@ fn session(request: &PreparedDeviceRequest) -> Result<(AsyncClient, EventLoop), 
         .get("keep-alive-seconds")
         .map(|v| v.parse::<u64>())
         .transpose()
-        .map_err(|_| DeviceConnectorError::invalid("Invalid MQTT keep-alive"))?
+        .map_err(|_| DeviceGatewayError::invalid("Invalid MQTT keep-alive"))?
         .unwrap_or(30);
     if !(5..=3600).contains(&keep) {
-        return Err(DeviceConnectorError::invalid("MQTT keep-alive must be 5..3600 seconds"));
+        return Err(DeviceGatewayError::invalid("MQTT keep-alive must be 5..3600 seconds"));
     }
     options.set_keep_alive(Duration::from_secs(keep));
     if let Some(user) = &c.credentials.username {
@@ -81,21 +81,21 @@ fn session(request: &PreparedDeviceRequest) -> Result<(AsyncClient, EventLoop), 
     options.set_clean_start(true);
     Ok(AsyncClient::new(options, 32))
 }
-fn topic(request: &PreparedDeviceRequest, item: Option<&Item>) -> Result<String, DeviceConnectorError> {
+fn topic(request: &PreparedDeviceRequest, item: Option<&Item>) -> Result<String, DeviceGatewayError> {
     let topic = item
         .map(|i| i.address.as_str())
         .filter(|s| !s.is_empty())
         .or(request.query.as_deref())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| DeviceConnectorError::invalid("MQTT topic is required"))?;
+        .ok_or_else(|| DeviceGatewayError::invalid("MQTT topic is required"))?;
     Ok(topic.into())
 }
-async fn poll(events: &mut EventLoop, deadline: Instant, writing: bool) -> Result<Event, DeviceConnectorError> {
+async fn poll(events: &mut EventLoop, deadline: Instant, writing: bool) -> Result<Event, DeviceGatewayError> {
     tokio::time::timeout_at(deadline.into(), events.poll())
         .await
-        .map_err(|_| DeviceConnectorError::timeout(writing))?
+        .map_err(|_| DeviceGatewayError::timeout(writing))?
         .map_err(|_| {
-            let e = DeviceConnectorError::transport("MQTT connection failed");
+            let e = DeviceGatewayError::transport("MQTT connection failed");
             if writing { e.uncertain() } else { e }
         })
 }
@@ -104,18 +104,18 @@ async fn subscribe_topics(
     events: &mut EventLoop,
     topics: &[String],
     deadline: Instant,
-) -> Result<Vec<(String, Vec<u8>)>, DeviceConnectorError> {
+) -> Result<Vec<(String, Vec<u8>)>, DeviceGatewayError> {
     let mut pending = Vec::new();
     for topic in topics {
         client
             .subscribe(topic, QoS::AtLeastOnce)
             .await
-            .map_err(|_| DeviceConnectorError::transport("Cannot queue MQTT subscription"))?;
+            .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT subscription"))?;
         loop {
             match poll(events, deadline, false).await? {
                 Event::Incoming(Packet::SubAck(ack)) => {
                     if ack.return_codes.len() != 1 || !matches!(ack.return_codes[0], SubscribeReasonCode::Success(_)) {
-                        return Err(DeviceConnectorError::transport("MQTT broker rejected subscription"));
+                        return Err(DeviceGatewayError::transport("MQTT broker rejected subscription"));
                     }
                     break;
                 }
@@ -128,7 +128,7 @@ async fn subscribe_topics(
     }
     Ok(pending)
 }
-fn topics(r: &PreparedDeviceRequest) -> Result<Vec<String>, DeviceConnectorError> {
+fn topics(r: &PreparedDeviceRequest) -> Result<Vec<String>, DeviceGatewayError> {
     let mut topics = Vec::new();
     if r.plc_log {
         topics.push(topic(r, None)?);
@@ -141,7 +141,7 @@ fn topics(r: &PreparedDeviceRequest) -> Result<Vec<String>, DeviceConnectorError
         }
     }
     if topics.is_empty() {
-        return Err(DeviceConnectorError::invalid("MQTT request has no topics"));
+        return Err(DeviceGatewayError::invalid("MQTT request has no topics"));
     }
     Ok(topics)
 }
@@ -161,26 +161,21 @@ fn matches_topic(filter: &str, topic: &str) -> bool {
         }
     }
 }
-fn values(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8]) -> Result<Vec<ItemResult>, DeviceConnectorError> {
+fn values(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8]) -> Result<Vec<ItemResult>, DeviceGatewayError> {
     let mut selected = r.clone();
     selected
         .items
         .retain(|i| self::topic(r, Some(i)).is_ok_and(|t| matches_topic(&t, topic)));
     payload::read_payload(&selected, bytes)
 }
-fn emit(
-    r: &PreparedDeviceRequest,
-    topic: &str,
-    bytes: &[u8],
-    sink: &dyn SampleSink,
-) -> Result<(), DeviceConnectorError> {
+fn emit(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8], sink: &dyn SampleSink) -> Result<(), DeviceGatewayError> {
     if r.plc_log {
         return sink.emit(payload::plc_log_batch(r, bytes)?);
     }
     let mut samples = Vec::new();
     for i in values(r, topic, bytes)? {
         if let Some(error) = i.error {
-            return Err(DeviceConnectorError::invalid(error));
+            return Err(DeviceGatewayError::invalid(error));
         }
         if let Some(value) = i.value {
             samples.push(Sample {
@@ -202,7 +197,7 @@ fn emit(
     })
 }
 #[async_trait]
-impl DeviceConnectorClient for MqttClient {
+impl DeviceGatewayClient for MqttClient {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
@@ -217,7 +212,7 @@ impl DeviceConnectorClient for MqttClient {
         input: &RequestInput,
         out: &mut RequestOutput,
         deadline: Instant,
-    ) -> Result<(), DeviceConnectorError> {
+    ) -> Result<(), DeviceGatewayError> {
         let (client, mut events) = session(r)?;
         if r.operation == Operation::Write {
             let retain = match r
@@ -229,20 +224,20 @@ impl DeviceConnectorClient for MqttClient {
             {
                 "true" => true,
                 "false" => false,
-                _ => return Err(DeviceConnectorError::invalid("MQTT retain must be true or false")),
+                _ => return Err(DeviceGatewayError::invalid("MQTT retain must be true or false")),
             };
             // Preflight every payload before sending the first command.
             let plans = r
                 .items
                 .iter()
                 .map(|i| Ok((i, topic(r, Some(i))?, payload::write_item_payload(i, input)?)))
-                .collect::<Result<Vec<_>, DeviceConnectorError>>()?;
+                .collect::<Result<Vec<_>, DeviceGatewayError>>()?;
             if plans.is_empty() {
-                return Err(DeviceConnectorError::invalid("MQTT write has no items"));
+                return Err(DeviceGatewayError::invalid("MQTT write has no items"));
             }
             for (_, topic, _) in &plans {
                 if topic.contains(['#', '+']) {
-                    return Err(DeviceConnectorError::invalid(
+                    return Err(DeviceGatewayError::invalid(
                         "MQTT publication topic cannot contain wildcards",
                     ));
                 }
@@ -251,13 +246,13 @@ impl DeviceConnectorClient for MqttClient {
                 client
                     .publish(topic, QoS::AtLeastOnce, retain, bytes)
                     .await
-                    .map_err(|_| DeviceConnectorError::transport("Cannot queue MQTT publication"))?;
+                    .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT publication"))?;
                 loop {
                     if let Event::Incoming(Packet::PubAck(ack)) = poll(&mut events, deadline, true).await? {
                         if !matches!(ack.reason, PubAckReason::Success | PubAckReason::NoMatchingSubscribers) {
                             out.items.push(ItemResult::error(
                                 &i.parameter_id,
-                                DeviceConnectorError::transport("MQTT broker rejected publication"),
+                                DeviceGatewayError::transport("MQTT broker rejected publication"),
                             ));
                             break;
                         }
@@ -295,7 +290,7 @@ impl DeviceConnectorClient for MqttClient {
         sink: Arc<dyn SampleSink>,
         cancel: CancellationToken,
         deadline: Instant,
-    ) -> Result<tokio::task::JoinHandle<()>, DeviceConnectorError> {
+    ) -> Result<tokio::task::JoinHandle<()>, DeviceGatewayError> {
         let (client, mut events) = session(&r)?;
         let pending = subscribe_topics(&client, &mut events, &topics(&r)?, deadline).await?;
         for (t, p) in pending {

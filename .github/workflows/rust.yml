@@ -13,7 +13,7 @@ jobs:
           path: mr-moqui
       - uses: actions/checkout@v4
         with:
-          path: mr-moqui/runtime/component/moqui-device-connector
+          path: mr-moqui/runtime/component/moqui-device-gateway
       - uses: actions/checkout@v4
         with:
           repository: moqui/moqui-device
@@ -22,18 +22,18 @@ jobs:
       - name: Apply general service interface migration
         working-directory: mr-moqui/runtime/component/moqui-device
         run: |
-          if git apply --check ../moqui-device-connector/patches/moqui-device-mr-moqui.patch; then
-            git apply ../moqui-device-connector/patches/moqui-device-mr-moqui.patch
+          if git apply --check ../moqui-device-gateway/patches/moqui-device-mr-moqui.patch; then
+            git apply ../moqui-device-gateway/patches/moqui-device-mr-moqui.patch
           else
-            git apply --reverse --check ../moqui-device-connector/patches/moqui-device-mr-moqui.patch
+            git apply --reverse --check ../moqui-device-gateway/patches/moqui-device-mr-moqui.patch
           fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: Format
-        working-directory: mr-moqui/runtime/component/moqui-device-connector
-        run: cargo fmt --package moqui-device-connector -- --check
+        working-directory: mr-moqui/runtime/component/moqui-device-gateway
+        run: cargo fmt --package moqui-device-gateway -- --check
       - name: Test
-        run: cargo test --locked --manifest-path mr-moqui/runtime/component/moqui-device-connector/Cargo.toml
+        run: cargo test --locked --manifest-path mr-moqui/runtime/component/moqui-device-gateway/Cargo.toml
       - name: Lint
-        run: cargo clippy --locked --manifest-path mr-moqui/runtime/component/moqui-device-connector/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --locked --manifest-path mr-moqui/runtime/component/moqui-device-gateway/Cargo.toml --all-targets -- -D warnings

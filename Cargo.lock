@@ -2272,7 +2272,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "moqui-device-connector"
+name = "moqui-device-gateway"
 version = "0.1.0"
 dependencies = [
  "async-opcua",

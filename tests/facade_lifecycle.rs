@@ -1,6 +1,6 @@
 mod common;
 use async_trait::async_trait;
-use moqui_device_connector::*;
+use moqui_device_gateway::*;
 use std::{
     sync::{
         Arc,
@@ -10,7 +10,7 @@ use std::{
 };
 struct Reader(AtomicUsize);
 #[async_trait]
-impl DeviceConnectorClient for Reader {
+impl DeviceGatewayClient for Reader {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
@@ -25,7 +25,7 @@ impl DeviceConnectorClient for Reader {
         _: &RequestInput,
         out: &mut RequestOutput,
         _: Instant,
-    ) -> Result<(), DeviceConnectorError> {
+    ) -> Result<(), DeviceGatewayError> {
         self.0.fetch_add(1, Ordering::SeqCst);
         out.items
             .push(ItemResult::value("test-param", FieldValue::Unsigned(42)));
@@ -34,14 +34,14 @@ impl DeviceConnectorClient for Reader {
 }
 struct Sink;
 impl SampleSink for Sink {
-    fn emit(&self, _: SampleBatch) -> Result<(), DeviceConnectorError> {
+    fn emit(&self, _: SampleBatch) -> Result<(), DeviceGatewayError> {
         Ok(())
     }
 }
 #[tokio::test]
 async fn ownership_cancellation_and_shutdown() {
     let reader = Arc::new(Reader(AtomicUsize::new(0)));
-    let mut facade = DeviceConnectorFacade::new();
+    let mut facade = DeviceGatewayFacade::new();
     facade.install(Protocol::ModbusTcp, reader.clone());
     let facade = Arc::new(facade);
     let r = Arc::new(common::request(
@@ -120,7 +120,7 @@ async fn ownership_cancellation_and_shutdown() {
 #[tokio::test]
 async fn event_subscription_does_not_silently_become_polling() {
     let reader = Arc::new(Reader(AtomicUsize::new(0)));
-    let mut f = DeviceConnectorFacade::new();
+    let mut f = DeviceGatewayFacade::new();
     f.install(Protocol::ModbusTcp, reader);
     let f = Arc::new(f);
     let r = Arc::new(common::request(
@@ -142,7 +142,7 @@ async fn event_subscription_does_not_silently_become_polling() {
 }
 struct PartialReader;
 #[async_trait]
-impl DeviceConnectorClient for PartialReader {
+impl DeviceGatewayClient for PartialReader {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
@@ -157,10 +157,10 @@ impl DeviceConnectorClient for PartialReader {
         _: &RequestInput,
         out: &mut RequestOutput,
         _: Instant,
-    ) -> Result<(), DeviceConnectorError> {
+    ) -> Result<(), DeviceGatewayError> {
         out.items
             .push(ItemResult::value("test-param", FieldValue::Unsigned(10)));
-        Err(DeviceConnectorError::transport("second item failed"))
+        Err(DeviceGatewayError::transport("second item failed"))
     }
 }
 #[tokio::test]
@@ -171,7 +171,7 @@ async fn partial_read_decodes_successes_and_marks_missing_items() {
     second.parameter_id = "second-param".into();
     r.items.push(second);
     let r = Arc::new(r);
-    let mut f = DeviceConnectorFacade::new();
+    let mut f = DeviceGatewayFacade::new();
     f.install(Protocol::ModbusTcp, Arc::new(PartialReader));
     let f = Arc::new(f);
     let mut out = RequestOutput::default();

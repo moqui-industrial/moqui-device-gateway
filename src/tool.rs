@@ -1,6 +1,6 @@
 //! Factory lifecycle owns the I/O runtime and a bounded persistence queue.
 use crate::{
-    client::{DeviceConnectorFacade, SampleSink},
+    client::{DeviceGatewayFacade, SampleSink},
     model::*,
 };
 use moqui_core::{
@@ -18,12 +18,12 @@ use std::{
     time::Duration,
 };
 #[derive(Default)]
-pub struct DeviceConnectorToolFactory {
+pub struct DeviceGatewayToolFactory {
     state: Mutex<Option<Arc<State>>>,
 }
 pub(crate) struct State {
     pub runtime: tokio::runtime::Runtime,
-    pub facade: Arc<DeviceConnectorFacade>,
+    pub facade: Arc<DeviceGatewayFacade>,
     pub sink: Arc<QueueSink>,
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -32,51 +32,51 @@ pub(crate) struct QueueSink {
     sender: mpsc::SyncSender<SampleBatch>,
 }
 impl SampleSink for QueueSink {
-    fn emit(&self, batch: SampleBatch) -> Result<(), DeviceConnectorError> {
+    fn emit(&self, batch: SampleBatch) -> Result<(), DeviceGatewayError> {
         self.sender.try_send(batch).map_err(|e| match e {
-            mpsc::TrySendError::Full(_) => DeviceConnectorError::new(
+            mpsc::TrySendError::Full(_) => DeviceGatewayError::new(
                 ErrorKind::Busy,
-                "Device connector persistence queue is full; sample was not saved",
+                "Device gateway persistence queue is full; sample was not saved",
             ),
             mpsc::TrySendError::Disconnected(_) => {
-                DeviceConnectorError::new(ErrorKind::Closed, "Device connector persistence worker is closed")
+                DeviceGatewayError::new(ErrorKind::Closed, "Device gateway persistence worker is closed")
             }
         })
     }
 }
-impl DeviceConnectorToolFactory {
+impl DeviceGatewayToolFactory {
     pub(crate) fn state(&self) -> Result<Arc<State>, Error> {
         self.state
             .lock()
-            .map_err(|_| Error::new("Device connector factory lock poisoned"))?
+            .map_err(|_| Error::new("Device gateway factory lock poisoned"))?
             .clone()
-            .ok_or_else(|| Error::new("Device connector factory is not initialized"))
+            .ok_or_else(|| Error::new("Device gateway factory is not initialized"))
     }
     /// Resolve once during setup. The returned API needs no ExecutionContext.
-    pub fn facade(&self) -> Result<Arc<DeviceConnectorFacade>, Error> {
+    pub fn facade(&self) -> Result<Arc<DeviceGatewayFacade>, Error> {
         Ok(self.state()?.facade.clone())
     }
 }
-struct DeviceConnectorTool {
-    pub _facade: Arc<DeviceConnectorFacade>,
+struct DeviceGatewayTool {
+    pub _facade: Arc<DeviceGatewayFacade>,
 }
-impl Tool for DeviceConnectorTool {}
-impl ToolFactory for DeviceConnectorToolFactory {
+impl Tool for DeviceGatewayTool {}
+impl ToolFactory for DeviceGatewayToolFactory {
     fn name(&self) -> &str {
-        "DeviceConnector"
+        "DeviceGateway"
     }
     fn init(&self, factory: &Arc<ExecutionContextFactory>) -> Result<(), Error> {
         let mut state = self
             .state
             .lock()
-            .map_err(|_| Error::new("Device connector factory lock poisoned"))?;
+            .map_err(|_| Error::new("Device gateway factory lock poisoned"))?;
         if state.is_some() {
             return Ok(());
         }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
-            .thread_name("device-connector-io")
+            .thread_name("device-gateway-io")
             .build()
             .map_err(|e| Error::new(e.to_string()))?;
         let (sender, receiver) = mpsc::sync_channel::<SampleBatch>(1024);
@@ -84,12 +84,12 @@ impl ToolFactory for DeviceConnectorToolFactory {
         let stopped = stop.clone();
         let factory = Arc::downgrade(factory);
         let worker = std::thread::Builder::new()
-            .name("device-connector-store".into())
+            .name("device-gateway-store".into())
             .spawn(move || persist_loop(factory, receiver, stopped))
             .map_err(|e| Error::new(e.to_string()))?;
         *state = Some(Arc::new(State {
             runtime,
-            facade: Arc::new(DeviceConnectorFacade::new()),
+            facade: Arc::new(DeviceGatewayFacade::new()),
             sink: Arc::new(QueueSink { sender }),
             stop,
             worker: Mutex::new(Some(worker)),
@@ -97,7 +97,7 @@ impl ToolFactory for DeviceConnectorToolFactory {
         Ok(())
     }
     fn get_instance(&self, _: &[Value]) -> Result<Arc<dyn Tool>, Error> {
-        Ok(Arc::new(DeviceConnectorTool {
+        Ok(Arc::new(DeviceGatewayTool {
             _facade: self.facade()?,
         }))
     }
@@ -110,7 +110,7 @@ impl ToolFactory for DeviceConnectorToolFactory {
                 && let Some(w) = w.take()
                 && w.join().is_err()
             {
-                tracing::error!("Device connector persistence worker panicked");
+                tracing::error!("Device gateway persistence worker panicked");
             }
         }
     }
@@ -126,7 +126,7 @@ fn persist_loop(factory: Weak<ExecutionContextFactory>, receiver: mpsc::Receiver
                 let _entered = ec.enter();
                 let _auth = ec.disable_authz();
                 if let Err(error) = crate::binding::persist_batch(&ec, &batch) {
-                    tracing::error!(request=%batch.request_name,error=%error,"Device connector samples were not saved");
+                    tracing::error!(request=%batch.request_name,error=%error,"Device gateway samples were not saved");
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => break,

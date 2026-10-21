@@ -1,5 +1,5 @@
 mod common;
-use moqui_device_connector::{codec::ValueCodec, payload, *};
+use moqui_device_gateway::{codec::ValueCodec, payload, *};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 fn d(s: &str) -> Decimal {

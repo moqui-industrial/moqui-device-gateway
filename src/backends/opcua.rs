@@ -1,6 +1,6 @@
 //! OPC UA sessions and native data-change subscriptions. No writes are replayed.
 use crate::{
-    client::{DeviceConnectorClient, SampleSink},
+    client::{DeviceGatewayClient, SampleSink},
     model::*,
 };
 use async_trait::async_trait;
@@ -29,16 +29,16 @@ impl Drop for SessionGuard {
         self.task.abort();
     }
 }
-pub fn node_id(text: &str) -> Result<NodeId, DeviceConnectorError> {
+pub fn node_id(text: &str) -> Result<NodeId, DeviceGatewayError> {
     let text = text.trim();
     let text = text
         .strip_prefix("RAW(")
         .and_then(|t| t.strip_suffix(')'))
         .unwrap_or(text);
     NodeId::from_str(text)
-        .map_err(|_| DeviceConnectorError::invalid("Invalid OPC UA NodeId; use an explicit namespace and identifier"))
+        .map_err(|_| DeviceGatewayError::invalid("Invalid OPC UA NodeId; use an explicit namespace and identifier"))
 }
-pub fn from_variant(v: &Variant) -> Result<FieldValue, DeviceConnectorError> {
+pub fn from_variant(v: &Variant) -> Result<FieldValue, DeviceGatewayError> {
     Ok(match v {
         Variant::Empty => FieldValue::Null,
         Variant::Boolean(v) => FieldValue::Bool(*v),
@@ -55,14 +55,14 @@ pub fn from_variant(v: &Variant) -> Result<FieldValue, DeviceConnectorError> {
         Variant::String(v) => FieldValue::Text(v.to_string()),
         Variant::ByteString(v) => FieldValue::Bytes(v.value.clone().unwrap_or_default()),
         _ => {
-            return Err(DeviceConnectorError::unsupported(
+            return Err(DeviceGatewayError::unsupported(
                 "Unsupported OPC UA variant type; no string coercion is applied",
             ));
         }
     })
 }
-pub fn to_variant(v: &FieldValue, ty: PhysicalType) -> Result<Variant, DeviceConnectorError> {
-    let e = || DeviceConnectorError::invalid("Value does not match OPC UA physical type");
+pub fn to_variant(v: &FieldValue, ty: PhysicalType) -> Result<Variant, DeviceGatewayError> {
+    let e = || DeviceGatewayError::invalid("Value does not match OPC UA physical type");
     let v = if matches!(ty, PhysicalType::Bool | PhysicalType::Text | PhysicalType::Bytes) {
         v.clone()
     } else {
@@ -88,11 +88,11 @@ pub fn to_variant(v: &FieldValue, ty: PhysicalType) -> Result<Variant, DeviceCon
 fn result(id: &str, v: DataValue) -> ItemResult {
     let status = v.status.unwrap_or(StatusCode::Good);
     let mut result = if !status.is_good() {
-        ItemResult::error(id, DeviceConnectorError::transport(format!("OPC UA quality: {status}")))
+        ItemResult::error(id, DeviceGatewayError::transport(format!("OPC UA quality: {status}")))
     } else {
         match v.value.as_ref().map(from_variant).transpose() {
             Ok(Some(v)) => ItemResult::value(id, v),
-            Ok(None) => ItemResult::error(id, DeviceConnectorError::transport("OPC UA result has no value")),
+            Ok(None) => ItemResult::error(id, DeviceGatewayError::transport("OPC UA result has no value")),
             Err(e) => ItemResult::error(id, e),
         }
     };
@@ -100,7 +100,7 @@ fn result(id: &str, v: DataValue) -> ItemResult {
     result.source_time = v.source_timestamp.map(|t| SystemTime::from(t.as_chrono()));
     result
 }
-async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<SessionGuard, DeviceConnectorError> {
+async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<SessionGuard, DeviceGatewayError> {
     let c = &r.connection;
     let option = |k: &str| c.options.get(k).map(String::as_str);
     for key in c.options.keys() {
@@ -108,14 +108,12 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
             key.as_str(),
             "securityPolicy" | "securityMode" | "pkiDir" | "certificateFile" | "privateKeyFile" | "applicationUri"
         ) {
-            return Err(DeviceConnectorError::unsupported(format!(
-                "Unknown OPC UA option: {key}"
-            )));
+            return Err(DeviceGatewayError::unsupported(format!("Unknown OPC UA option: {key}")));
         }
     }
-    let url = url::Url::parse(&c.endpoint).map_err(|_| DeviceConnectorError::invalid("Invalid OPC UA endpoint"))?;
+    let url = url::Url::parse(&c.endpoint).map_err(|_| DeviceGatewayError::invalid("Invalid OPC UA endpoint"))?;
     if url.scheme() != "opc.tcp" || !url.username().is_empty() || url.password().is_some() || url.query().is_some() {
-        return Err(DeviceConnectorError::invalid(
+        return Err(DeviceGatewayError::invalid(
             "OPC UA endpoint must be opc.tcp:// without embedded credentials or options",
         ));
     }
@@ -124,7 +122,7 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
         policy,
         "None" | "Basic256Sha256" | "Aes128_Sha256_RsaOaep" | "Aes256_Sha256_RsaPss"
     ) {
-        return Err(DeviceConnectorError::unsupported(
+        return Err(DeviceGatewayError::unsupported(
             "Unsupported or deprecated OPC UA security policy",
         ));
     }
@@ -132,17 +130,15 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
         "None" => MessageSecurityMode::None,
         "Sign" => MessageSecurityMode::Sign,
         "SignAndEncrypt" => MessageSecurityMode::SignAndEncrypt,
-        _ => return Err(DeviceConnectorError::invalid("Invalid OPC UA security mode")),
+        _ => return Err(DeviceGatewayError::invalid("Invalid OPC UA security mode")),
     };
     if (policy == "None") != (mode == MessageSecurityMode::None) {
-        return Err(DeviceConnectorError::invalid(
-            "OPC UA policy and security mode disagree",
-        ));
+        return Err(DeviceGatewayError::invalid("OPC UA policy and security mode disagree"));
     }
     let mut builder = ClientBuilder::new()
-        .application_name("moqui-device-connector")
-        .application_uri(option("applicationUri").unwrap_or("urn:moqui:device-connector"))
-        .pki_dir(option("pkiDir").unwrap_or("runtime/device-connector/opcua-pki"))
+        .application_name("moqui-device-gateway")
+        .application_uri(option("applicationUri").unwrap_or("urn:moqui:device-gateway"))
+        .pki_dir(option("pkiDir").unwrap_or("runtime/device-gateway/opcua-pki"))
         .trust_server_certs(false)
         .verify_server_certs(true)
         .create_sample_keypair(false)
@@ -154,7 +150,7 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
         }
         (None, None) if mode == MessageSecurityMode::None => {}
         _ => {
-            return Err(DeviceConnectorError::invalid(
+            return Err(DeviceGatewayError::invalid(
                 "Secure OPC UA requires certificateFile and privateKeyFile",
             ));
         }
@@ -165,9 +161,7 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
             (IdentityToken::new_user_name(u, p), UserTokenType::UserName)
         }
         _ => {
-            return Err(DeviceConnectorError::invalid(
-                "Username/password require SignAndEncrypt",
-            ));
+            return Err(DeviceGatewayError::invalid("Username/password require SignAndEncrypt"));
         }
     };
     let mut token = UserTokenPolicy::anonymous();
@@ -176,21 +170,21 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
     let endpoint: EndpointDescription = (c.endpoint.as_str(), policy.as_str(), mode, token).into();
     let mut client = builder
         .client()
-        .map_err(|_| DeviceConnectorError::invalid("Invalid OPC UA client configuration"))?;
+        .map_err(|_| DeviceGatewayError::invalid("Invalid OPC UA client configuration"))?;
     let (session, event_loop) =
         tokio::time::timeout_at(deadline.into(), client.connect_to_matching_endpoint(endpoint, identity))
             .await
-            .map_err(|_| DeviceConnectorError::timeout(false))?
-            .map_err(|_| DeviceConnectorError::transport("OPC UA endpoint connection failed"))?;
+            .map_err(|_| DeviceGatewayError::timeout(false))?
+            .map_err(|_| DeviceGatewayError::transport("OPC UA endpoint connection failed"))?;
     let guard = SessionGuard {
         session: session.clone(),
         task: event_loop.spawn(),
     };
     if !tokio::time::timeout_at(deadline.into(), session.wait_for_connection())
         .await
-        .map_err(|_| DeviceConnectorError::timeout(false))?
+        .map_err(|_| DeviceGatewayError::timeout(false))?
     {
-        return Err(DeviceConnectorError::transport("OPC UA session did not connect"));
+        return Err(DeviceGatewayError::transport("OPC UA session did not connect"));
     }
     Ok(guard)
 }
@@ -199,10 +193,10 @@ impl OpcUaClient {
         &self,
         r: &PreparedDeviceRequest,
         deadline: Instant,
-    ) -> Result<Arc<SessionGuard>, DeviceConnectorError> {
+    ) -> Result<Arc<SessionGuard>, DeviceGatewayError> {
         let mut sessions = tokio::time::timeout_at(deadline.into(), self.sessions.lock())
             .await
-            .map_err(|_| DeviceConnectorError::timeout(false))?;
+            .map_err(|_| DeviceGatewayError::timeout(false))?;
         let key = r.connection.session_key();
         if let Some(s) = sessions.get(&key)
             && !s.task.is_finished()
@@ -215,7 +209,7 @@ impl OpcUaClient {
     }
 }
 #[async_trait]
-impl DeviceConnectorClient for OpcUaClient {
+impl DeviceGatewayClient for OpcUaClient {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
@@ -230,14 +224,14 @@ impl DeviceConnectorClient for OpcUaClient {
         input: &RequestInput,
         out: &mut RequestOutput,
         deadline: Instant,
-    ) -> Result<(), DeviceConnectorError> {
+    ) -> Result<(), DeviceGatewayError> {
         let nodes = r
             .items
             .iter()
             .map(|i| node_id(&i.address))
             .collect::<Result<Vec<_>, _>>()?;
         if nodes.is_empty() {
-            return Err(DeviceConnectorError::invalid("OPC UA request has no items"));
+            return Err(DeviceGatewayError::invalid("OPC UA request has no items"));
         }
         let writing = r.operation == Operation::Write;
         let writes = if writing {
@@ -253,12 +247,12 @@ impl DeviceConnectorClient for OpcUaClient {
                             input
                                 .values
                                 .get(&i.parameter_id)
-                                .ok_or_else(|| DeviceConnectorError::invalid("Missing OPC UA write value"))?,
+                                .ok_or_else(|| DeviceGatewayError::invalid("Missing OPC UA write value"))?,
                             i.physical_type,
                         )?),
                     })
                 })
-                .collect::<Result<Vec<_>, DeviceConnectorError>>()?
+                .collect::<Result<Vec<_>, DeviceGatewayError>>()?
         } else {
             vec![]
         };
@@ -267,10 +261,10 @@ impl DeviceConnectorClient for OpcUaClient {
         if writing {
             let statuses = tokio::time::timeout_at(deadline.into(), s.write(&writes))
                 .await
-                .map_err(|_| DeviceConnectorError::timeout(true))?
-                .map_err(|_| DeviceConnectorError::transport("OPC UA write failed").uncertain())?;
+                .map_err(|_| DeviceGatewayError::timeout(true))?
+                .map_err(|_| DeviceGatewayError::transport("OPC UA write failed").uncertain())?;
             if statuses.len() != r.items.len() {
-                return Err(DeviceConnectorError::transport("OPC UA write result count differs").uncertain());
+                return Err(DeviceGatewayError::transport("OPC UA write result count differs").uncertain());
             }
             for (i, status) in r.items.iter().zip(statuses) {
                 out.items.push(if status.is_good() {
@@ -278,7 +272,7 @@ impl DeviceConnectorClient for OpcUaClient {
                 } else {
                     ItemResult::error(
                         &i.parameter_id,
-                        DeviceConnectorError::transport(format!("OPC UA write rejected: {status}")),
+                        DeviceGatewayError::transport(format!("OPC UA write rejected: {status}")),
                     )
                 });
             }
@@ -286,10 +280,10 @@ impl DeviceConnectorClient for OpcUaClient {
             let nodes = nodes.into_iter().map(ReadValueId::from).collect::<Vec<_>>();
             let values = tokio::time::timeout_at(deadline.into(), s.read(&nodes, TimestampsToReturn::Both, 0.0))
                 .await
-                .map_err(|_| DeviceConnectorError::timeout(false))?
-                .map_err(|_| DeviceConnectorError::transport("OPC UA read failed"))?;
+                .map_err(|_| DeviceGatewayError::timeout(false))?
+                .map_err(|_| DeviceGatewayError::transport("OPC UA read failed"))?;
             if values.len() != r.items.len() {
-                return Err(DeviceConnectorError::transport("OPC UA read result count differs"));
+                return Err(DeviceGatewayError::transport("OPC UA read result count differs"));
             }
             for (i, v) in r.items.iter().zip(values) {
                 out.items.push(result(&i.parameter_id, v));
@@ -303,14 +297,14 @@ impl DeviceConnectorClient for OpcUaClient {
         sink: Arc<dyn SampleSink>,
         cancel: CancellationToken,
         deadline: Instant,
-    ) -> Result<tokio::task::JoinHandle<()>, DeviceConnectorError> {
+    ) -> Result<tokio::task::JoinHandle<()>, DeviceGatewayError> {
         let nodes = r
             .items
             .iter()
             .map(|i| node_id(&i.address))
             .collect::<Result<Vec<_>, _>>()?;
         if nodes.is_empty() {
-            return Err(DeviceConnectorError::invalid("OPC UA subscription has no items"));
+            return Err(DeviceGatewayError::invalid("OPC UA subscription has no items"));
         }
         // A subscription owns a dedicated session, so cancellation cannot affect other requests.
         let guard = connect(&r, deadline).await?;
@@ -350,8 +344,8 @@ impl DeviceConnectorClient for OpcUaClient {
             session.create_subscription(r.polling_interval, 10, 30, 0, 0, true, callback),
         )
         .await
-        .map_err(|_| DeviceConnectorError::timeout(false))?
-        .map_err(|_| DeviceConnectorError::transport("Cannot create OPC UA subscription"))?;
+        .map_err(|_| DeviceGatewayError::timeout(false))?
+        .map_err(|_| DeviceGatewayError::transport("Cannot create OPC UA subscription"))?;
         let items = nodes
             .into_iter()
             .map(|n| {
@@ -367,10 +361,10 @@ impl DeviceConnectorClient for OpcUaClient {
             session.create_monitored_items(sub, TimestampsToReturn::Both, items),
         )
         .await
-        .map_err(|_| DeviceConnectorError::timeout(false))?
-        .map_err(|_| DeviceConnectorError::transport("Cannot create OPC UA monitored items"))?;
+        .map_err(|_| DeviceGatewayError::timeout(false))?
+        .map_err(|_| DeviceGatewayError::transport("Cannot create OPC UA monitored items"))?;
         if results.len() != r.items.len() || results.iter().any(|i| !i.result.status_code.is_good()) {
-            return Err(DeviceConnectorError::transport("OPC UA rejected monitored items"));
+            return Err(DeviceGatewayError::transport("OPC UA rejected monitored items"));
         }
         Ok(tokio::spawn(async move {
             tokio::select! {_=cancel.cancelled()=>{},_ = async {while !guard.task.is_finished(){tokio::time::sleep(Duration::from_millis(100)).await;}}=>{tracing::error!(request=%r.name,"OPC UA subscription session stopped");}}

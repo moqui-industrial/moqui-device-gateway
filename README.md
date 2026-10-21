@@ -1,19 +1,29 @@
-# moqui-device-connector
+# moqui-device-gateway
 
 Native field communication for [mr-moqui](https://github.com/moqui/mr-moqui).
-This is the first implementation of the merger of moqui-plc4j and the protocol
-execution part of the original Quarkus/Camel moqui-device-gateway.
+On this branch the gateway is a Moqui component that runs inside mr-moqui, not a
+separate process. It merges moqui-plc4j and the protocol execution part of the
+Quarkus/Camel moqui-device-gateway.
+
+| Branch | Content |
+|---|---|
+| `main` | The Quarkus/Camel standalone gateway |
+| `old-mr-moqui` | The first standalone Rust rewrite, kept for reference until this work is complete |
+| `mr-moqui` | This Moqui component |
+
+The rest of the Quarkus/Camel gateway moves here step by step: its SQL becomes
+entity engine queries and its REST calls become local service calls.
 
 The public application entry point remains
 `moqui.device.DeviceServices.run#DeviceRequest`. Set the request's
-`runServiceName` to `moqui.device.connector.DeviceConnectorServices.run#DeviceRequest`.
+`runServiceName` to `moqui.device.gateway.DeviceGatewayServices.run#DeviceRequest`.
 Device, DeviceConnection, DeviceRequest, DeviceRequestItem, Parameter and
 ParameterDef remain the existing Moqui entities. No additional database,
 REST process, route interpreter or scheduler is introduced.
 
 ## Installation
 
-Install this repository at `runtime/component/moqui-device-connector` in mr-moqui,
+Install this repository at `runtime/component/moqui-device-gateway` in mr-moqui,
 with `moqui-device` and `moqui-math` on their `mr-moqui` branches. The component
 uses the framework's sibling `moqui-core` and `moqui-lib` crates. It is not a
 standalone checkout with respect to Cargo path dependency resolution.
@@ -24,12 +34,12 @@ entry point, forwards content-transfer inputs and allows itemless unsubscribe.
 It preserves the existing dispatch to GenICam and other implementations.
 
 Build using the framework's `./moq build`, which links native components.
-The component registers `moqui_device_connector::DeviceConnectorToolFactory` as tool `DeviceConnector`
+The component registers `moqui_device_gateway::DeviceGatewayToolFactory` as tool `DeviceGateway`
 and its native service through the framework's native registry. Rust 1.99 or
 later is required by this initial lockfile/toolchain baseline.
 
 ```sh
-cd runtime/component/moqui-device-connector
+cd runtime/component/moqui-device-gateway
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ```
@@ -59,9 +69,9 @@ not covered by this release. The complete migration checklist is in
 
 ## One API, two callers
 
-`DeviceConnectorFacade::execute` takes a prepared, owned request, input values, an
+`DeviceGatewayFacade::execute` takes a prepared, owned request, input values, an
 absolute monotonic deadline, output storage and an optional sample sink. The
-`DeviceConnectorClient` trait is the backend contract. Neither requires an
+`DeviceGatewayClient` trait is the backend contract. Neither requires an
 ExecutionContext. See [direct Rust access](examples/direct_modbus.rs).
 
 The Moqui native service resolves cached configuration using the Entity Engine,

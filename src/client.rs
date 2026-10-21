@@ -13,10 +13,10 @@ use tokio_util::sync::CancellationToken;
 
 pub trait SampleSink: Send + Sync {
     /// Must not block a protocol callback. A full queue is an observable failure.
-    fn emit(&self, batch: SampleBatch) -> Result<(), DeviceConnectorError>;
+    fn emit(&self, batch: SampleBatch) -> Result<(), DeviceGatewayError>;
 }
 #[async_trait]
-pub trait DeviceConnectorClient: Send + Sync {
+pub trait DeviceGatewayClient: Send + Sync {
     fn capabilities(&self) -> Capabilities;
     async fn execute(
         &self,
@@ -24,15 +24,15 @@ pub trait DeviceConnectorClient: Send + Sync {
         input: &RequestInput,
         output: &mut RequestOutput,
         deadline: Instant,
-    ) -> Result<(), DeviceConnectorError>;
+    ) -> Result<(), DeviceGatewayError>;
     async fn subscribe(
         &self,
         _request: Arc<PreparedDeviceRequest>,
         _sink: Arc<dyn SampleSink>,
         _cancel: CancellationToken,
         _deadline: Instant,
-    ) -> Result<tokio::task::JoinHandle<()>, DeviceConnectorError> {
-        Err(DeviceConnectorError::unsupported(
+    ) -> Result<tokio::task::JoinHandle<()>, DeviceGatewayError> {
+        Err(DeviceGatewayError::unsupported(
             "This backend has no event subscription",
         ))
     }
@@ -43,8 +43,8 @@ struct Subscription {
     task: tokio::task::JoinHandle<()>,
     request: Arc<PreparedDeviceRequest>,
 }
-pub struct DeviceConnectorFacade {
-    clients: HashMap<ProtocolKey, Arc<dyn DeviceConnectorClient>>,
+pub struct DeviceGatewayFacade {
+    clients: HashMap<ProtocolKey, Arc<dyn DeviceGatewayClient>>,
     subscriptions: Mutex<HashMap<String, Subscription>>,
     lifecycle: Mutex<()>,
     closed: AtomicBool,
@@ -56,12 +56,12 @@ impl From<Protocol> for ProtocolKey {
         Self(p as u8)
     }
 }
-impl Default for DeviceConnectorFacade {
+impl Default for DeviceGatewayFacade {
     fn default() -> Self {
         Self::new()
     }
 }
-impl DeviceConnectorFacade {
+impl DeviceGatewayFacade {
     pub fn new() -> Self {
         let mut facade = Self {
             clients: HashMap::new(),
@@ -86,7 +86,7 @@ impl DeviceConnectorFacade {
         facade.install(Protocol::Sftp, files);
         facade
     }
-    pub fn install(&mut self, protocol: Protocol, client: Arc<dyn DeviceConnectorClient>) {
+    pub fn install(&mut self, protocol: Protocol, client: Arc<dyn DeviceGatewayClient>) {
         self.clients.insert(protocol.into(), client);
     }
     pub async fn execute(
@@ -96,32 +96,32 @@ impl DeviceConnectorFacade {
         output: &mut RequestOutput,
         deadline: Instant,
         sink: Option<Arc<dyn SampleSink>>,
-    ) -> Result<ExecutionOutcome, DeviceConnectorError> {
+    ) -> Result<ExecutionOutcome, DeviceGatewayError> {
         request.validate()?;
         *output = RequestOutput::default();
         if self.closed.load(Ordering::Acquire) {
-            return Err(DeviceConnectorError::new(
+            return Err(DeviceGatewayError::new(
                 ErrorKind::Closed,
-                "Device connector is shutting down",
+                "Device gateway is shutting down",
             ));
         }
         if deadline <= Instant::now() {
-            return Err(DeviceConnectorError::timeout(false));
+            return Err(DeviceGatewayError::timeout(false));
         }
         if request.operation == Operation::Unsubscribe {
             let _guard = tokio::time::timeout_at(deadline.into(), self.lifecycle.lock())
                 .await
-                .map_err(|_| DeviceConnectorError::timeout(false))?;
+                .map_err(|_| DeviceGatewayError::timeout(false))?;
             let key = request
                 .parent_request
                 .as_ref()
-                .ok_or_else(|| DeviceConnectorError::invalid("parentRequestName is required"))?;
+                .ok_or_else(|| DeviceGatewayError::invalid("parentRequestName is required"))?;
             let mut subscriptions = self.subscriptions.lock().await;
             if subscriptions
                 .get(key)
                 .is_some_and(|s| s.request.device_id != request.device_id)
             {
-                return Err(DeviceConnectorError::invalid(
+                return Err(DeviceGatewayError::invalid(
                     "Subscription belongs to a different device",
                 ));
             }
@@ -132,7 +132,7 @@ impl DeviceConnectorFacade {
                 if tokio::time::timeout_at(deadline.into(), &mut sub.task).await.is_err() {
                     sub.task.abort();
                     let _ = sub.task.await;
-                    return Err(DeviceConnectorError::timeout(false));
+                    return Err(DeviceGatewayError::timeout(false));
                 }
             }
             return Ok(ExecutionOutcome::Completed);
@@ -141,25 +141,25 @@ impl DeviceConnectorFacade {
             .clients
             .get(&request.connection.protocol.into())
             .cloned()
-            .ok_or_else(|| DeviceConnectorError::unsupported("Protocol is not compiled into this component"))?;
+            .ok_or_else(|| DeviceGatewayError::unsupported("Protocol is not compiled into this component"))?;
         let cap = client.capabilities();
         match request.operation {
-            Operation::Read if !cap.read => return Err(DeviceConnectorError::unsupported("Backend cannot read")),
-            Operation::Write if !cap.write => return Err(DeviceConnectorError::unsupported("Backend cannot write")),
+            Operation::Read if !cap.read => return Err(DeviceGatewayError::unsupported("Backend cannot read")),
+            Operation::Write if !cap.write => return Err(DeviceGatewayError::unsupported("Backend cannot write")),
             Operation::Transfer if !cap.transfer => {
-                return Err(DeviceConnectorError::unsupported("Backend cannot transfer files"));
+                return Err(DeviceGatewayError::unsupported("Backend cannot transfer files"));
             }
             _ => {}
         }
         if matches!(request.operation, Operation::Poll | Operation::Subscribe) {
-            let sink = sink.ok_or_else(|| DeviceConnectorError::invalid("Subscription requires a sample sink"))?;
+            let sink = sink.ok_or_else(|| DeviceGatewayError::invalid("Subscription requires a sample sink"))?;
             let _guard = tokio::time::timeout_at(deadline.into(), self.lifecycle.lock())
                 .await
-                .map_err(|_| DeviceConnectorError::timeout(false))?;
+                .map_err(|_| DeviceGatewayError::timeout(false))?;
             if let Some(existing) = self.subscriptions.lock().await.get(&request.name)
                 && !existing.task.is_finished()
             {
-                return Err(DeviceConnectorError::new(
+                return Err(DeviceGatewayError::new(
                     ErrorKind::Busy,
                     "Request is already active; unsubscribe before replacing it",
                 ));
@@ -183,7 +183,7 @@ impl DeviceConnectorFacade {
                 self.read_write(&request, input, &mut probe, deadline, client.clone())
                     .await?;
                 if matches!(probe.outcome(), ExecutionOutcome::Failed | ExecutionOutcome::Partial) {
-                    return Err(DeviceConnectorError::transport("Polling probe returned failed items"));
+                    return Err(DeviceGatewayError::transport("Polling probe returned failed items"));
                 }
                 sink.emit(batch(&request, probe.items))?;
                 let facade = Arc::downgrade(self);
@@ -215,7 +215,7 @@ impl DeviceConnectorFacade {
                     }
                 })
             } else {
-                return Err(DeviceConnectorError::unsupported("Backend cannot subscribe or poll"));
+                return Err(DeviceGatewayError::unsupported("Backend cannot subscribe or poll"));
             };
             self.subscriptions.lock().await.insert(
                 request.name.clone(),
@@ -237,15 +237,15 @@ impl DeviceConnectorFacade {
         input: &RequestInput,
         output: &mut RequestOutput,
         deadline: Instant,
-        client: Arc<dyn DeviceConnectorClient>,
-    ) -> Result<(), DeviceConnectorError> {
+        client: Arc<dyn DeviceGatewayClient>,
+    ) -> Result<(), DeviceGatewayError> {
         let mut physical = input.clone();
         if request.operation == Operation::Write {
             for item in &request.items {
                 let value = input
                     .values
                     .get(&item.parameter_id)
-                    .ok_or_else(|| DeviceConnectorError::invalid("Write item has no logical value"))?;
+                    .ok_or_else(|| DeviceGatewayError::invalid("Write item has no logical value"))?;
                 physical.values.insert(
                     item.parameter_id.clone(),
                     item.codec.encode(value, item.kind, item.physical_type)?,
@@ -255,7 +255,7 @@ impl DeviceConnectorFacade {
         let writing = matches!(request.operation, Operation::Write | Operation::Transfer);
         let execution = tokio::time::timeout_at(deadline.into(), client.execute(request, &physical, output, deadline))
             .await
-            .map_err(|_| DeviceConnectorError::timeout(writing))
+            .map_err(|_| DeviceGatewayError::timeout(writing))
             .and_then(|result| result);
         if matches!(
             request.operation,
@@ -299,7 +299,7 @@ impl DeviceConnectorFacade {
                 .await
                 .is_err()
             {
-                tracing::error!("Device connector backend did not close within five seconds");
+                tracing::error!("Device gateway backend did not close within five seconds");
             }
         }
     }
@@ -351,7 +351,7 @@ struct DecodedSink {
     inner: Arc<dyn SampleSink>,
 }
 impl SampleSink for DecodedSink {
-    fn emit(&self, mut value: SampleBatch) -> Result<(), DeviceConnectorError> {
+    fn emit(&self, mut value: SampleBatch) -> Result<(), DeviceGatewayError> {
         value.request = Some(self.request.clone());
         if !self.request.plc_log {
             for sample in &mut value.samples {
