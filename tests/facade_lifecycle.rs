@@ -1,0 +1,187 @@
+mod common;
+use async_trait::async_trait;
+use moqui_device_connector::*;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
+struct Reader(AtomicUsize);
+#[async_trait]
+impl DeviceConnectorClient for Reader {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            read: true,
+            write: false,
+            subscribe: false,
+            transfer: false,
+        }
+    }
+    async fn execute(
+        &self,
+        _: &PreparedDeviceRequest,
+        _: &RequestInput,
+        out: &mut RequestOutput,
+        _: Instant,
+    ) -> Result<(), DeviceConnectorError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        out.items
+            .push(ItemResult::value("test-param", FieldValue::Unsigned(42)));
+        Ok(())
+    }
+}
+struct Sink;
+impl SampleSink for Sink {
+    fn emit(&self, _: SampleBatch) -> Result<(), DeviceConnectorError> {
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn ownership_cancellation_and_shutdown() {
+    let reader = Arc::new(Reader(AtomicUsize::new(0)));
+    let mut facade = DeviceConnectorFacade::new();
+    facade.install(Protocol::ModbusTcp, reader.clone());
+    let facade = Arc::new(facade);
+    let r = Arc::new(common::request(
+        Protocol::ModbusTcp,
+        "localhost:502".into(),
+        Operation::Poll,
+    ));
+    let mut out = RequestOutput::default();
+    assert_eq!(
+        facade
+            .execute(
+                r.clone(),
+                &RequestInput::default(),
+                &mut out,
+                r.deadline(),
+                Some(Arc::new(Sink))
+            )
+            .await
+            .unwrap(),
+        ExecutionOutcome::Active
+    );
+    assert_eq!(
+        facade
+            .execute(
+                r.clone(),
+                &RequestInput::default(),
+                &mut out,
+                r.deadline(),
+                Some(Arc::new(Sink))
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::Busy
+    );
+    let mut stop = (*r).clone();
+    stop.name = "stop".into();
+    stop.operation = Operation::Unsubscribe;
+    stop.parent_request = Some(r.name.clone());
+    stop.device_id = "wrong-device".into();
+    let stop = Arc::new(stop);
+    assert_eq!(
+        facade
+            .execute(stop.clone(), &RequestInput::default(), &mut out, stop.deadline(), None)
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::Invalid
+    );
+    let mut valid = (*stop).clone();
+    valid.device_id = r.device_id.clone();
+    let valid = Arc::new(valid);
+    facade
+        .execute(
+            valid.clone(),
+            &RequestInput::default(),
+            &mut out,
+            valid.deadline(),
+            None,
+        )
+        .await
+        .unwrap();
+    let count = reader.0.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert_eq!(reader.0.load(Ordering::SeqCst), count);
+    facade.close().await;
+    assert_eq!(
+        facade
+            .execute(r.clone(), &RequestInput::default(), &mut out, r.deadline(), None)
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::Closed
+    );
+}
+#[tokio::test]
+async fn event_subscription_does_not_silently_become_polling() {
+    let reader = Arc::new(Reader(AtomicUsize::new(0)));
+    let mut f = DeviceConnectorFacade::new();
+    f.install(Protocol::ModbusTcp, reader);
+    let f = Arc::new(f);
+    let r = Arc::new(common::request(
+        Protocol::ModbusTcp,
+        "localhost:502".into(),
+        Operation::Subscribe,
+    ));
+    let e = f
+        .execute(
+            r.clone(),
+            &RequestInput::default(),
+            &mut RequestOutput::default(),
+            r.deadline(),
+            Some(Arc::new(Sink)),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Unsupported);
+}
+struct PartialReader;
+#[async_trait]
+impl DeviceConnectorClient for PartialReader {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            read: true,
+            write: false,
+            subscribe: false,
+            transfer: false,
+        }
+    }
+    async fn execute(
+        &self,
+        _: &PreparedDeviceRequest,
+        _: &RequestInput,
+        out: &mut RequestOutput,
+        _: Instant,
+    ) -> Result<(), DeviceConnectorError> {
+        out.items
+            .push(ItemResult::value("test-param", FieldValue::Unsigned(10)));
+        Err(DeviceConnectorError::transport("second item failed"))
+    }
+}
+#[tokio::test]
+async fn partial_read_decodes_successes_and_marks_missing_items() {
+    let mut r = common::request(Protocol::ModbusTcp, "localhost:502".into(), Operation::Read);
+    r.items[0].codec.scale = 2u32.into();
+    let mut second = r.items[0].clone();
+    second.parameter_id = "second-param".into();
+    r.items.push(second);
+    let r = Arc::new(r);
+    let mut f = DeviceConnectorFacade::new();
+    f.install(Protocol::ModbusTcp, Arc::new(PartialReader));
+    let f = Arc::new(f);
+    let mut out = RequestOutput::default();
+    assert!(
+        f.execute(r.clone(), &RequestInput::default(), &mut out, r.deadline(), None)
+            .await
+            .is_err()
+    );
+    assert_eq!(out.items[0].value, Some(FieldValue::Decimal(20u32.into())));
+    assert_eq!(out.items[1].status, ItemStatus::Failed);
+    assert_eq!(out.outcome(), ExecutionOutcome::Partial);
+    f.close().await;
+}

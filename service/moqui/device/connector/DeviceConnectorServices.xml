@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+    <service verb="run" noun="DeviceRequest" type="rust"
+             location="moqui_device_connector::binding::run_request" authenticate="false" transaction="ignore">
+        <description>Native field communication. Called by moqui.device.DeviceServices.run#DeviceRequest.</description>
+        <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
+        <out-parameters>
+            <parameter name="status"/>
+            <parameter name="itemResults" type="List"/>
+            <parameter name="subscriptionId"/>
+            <parameter name="errorMessage"/>
+            <parameter name="transferredFiles" type="List"/>
+        </out-parameters>
+    </service>
+</services>

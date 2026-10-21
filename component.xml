@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="moqui-device-connector" version="0.1.0">
+    <depends-on name="moqui-device" version="1.0.0"/>
+</component>

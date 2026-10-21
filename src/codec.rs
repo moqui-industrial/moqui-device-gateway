@@ -1,0 +1,180 @@
+use crate::model::*;
+use rust_decimal::{Decimal, RoundingStrategy};
+
+#[derive(Clone, Debug)]
+pub struct ValueCodec {
+    pub physical_min: Option<Decimal>,
+    pub physical_max: Option<Decimal>,
+    pub logical_min: Option<Decimal>,
+    pub logical_max: Option<Decimal>,
+    pub scale: Decimal,
+    pub offset: Decimal,
+    pub digits: Option<u32>,
+    pub tolerance: Decimal,
+    pub reverse_logic: bool,
+    pub allow_duplicate: bool,
+}
+impl Default for ValueCodec {
+    fn default() -> Self {
+        Self {
+            physical_min: None,
+            physical_max: None,
+            logical_min: None,
+            logical_max: None,
+            scale: Decimal::ONE,
+            offset: Decimal::ZERO,
+            digits: None,
+            tolerance: Decimal::ZERO,
+            reverse_logic: false,
+            allow_duplicate: false,
+        }
+    }
+}
+fn checked(v: Option<Decimal>) -> Result<Decimal, DeviceConnectorError> {
+    v.ok_or_else(|| DeviceConnectorError::invalid("Numeric conversion overflow"))
+}
+fn map(v: Decimal, a: Decimal, b: Decimal, c: Decimal, d: Decimal) -> Result<Decimal, DeviceConnectorError> {
+    checked(checked(v.checked_sub(a))?.checked_mul(checked(d.checked_sub(c))?))?
+        .checked_div(checked(b.checked_sub(a))?)
+        .and_then(|x| x.checked_add(c))
+        .ok_or_else(|| DeviceConnectorError::invalid("Invalid numeric mapping range"))
+}
+impl ValueCodec {
+    pub fn validate(&self) -> Result<(), DeviceConnectorError> {
+        if self.scale.is_zero() || self.tolerance < Decimal::ZERO || self.digits.is_some_and(|d| d > 28) {
+            return Err(DeviceConnectorError::invalid(
+                "Invalid scale, tolerance or decimal precision",
+            ));
+        }
+        if self.physical_min.zip(self.physical_max).is_some_and(|(a, b)| a >= b)
+            || self.logical_min.zip(self.logical_max).is_some_and(|(a, b)| a >= b)
+        {
+            return Err(DeviceConnectorError::invalid("Invalid minimum/maximum range"));
+        }
+        Ok(())
+    }
+    fn clamp(&self, mut n: Decimal) -> Decimal {
+        if let Some(v) = self.logical_min {
+            n = n.max(v);
+        }
+        if let Some(v) = self.logical_max {
+            n = n.min(v);
+        }
+        n
+    }
+    fn round(&self, n: Decimal) -> Decimal {
+        self.digits.map_or(n, |d| {
+            n.round_dp_with_strategy(d, RoundingStrategy::MidpointAwayFromZero)
+        })
+    }
+    pub fn decode(&self, value: &FieldValue, kind: ParameterKind) -> Result<FieldValue, DeviceConnectorError> {
+        self.validate()?;
+        match kind {
+            ParameterKind::Numeric => {
+                let mut n = value.decimal()?;
+                if let (Some(a), Some(b), Some(c), Some(d)) =
+                    (self.physical_min, self.physical_max, self.logical_min, self.logical_max)
+                {
+                    n = map(n, a, b, c, d)?;
+                }
+                n = checked(checked(n.checked_mul(self.scale))?.checked_add(self.offset))?;
+                Ok(FieldValue::Decimal(self.round(self.clamp(n))))
+            }
+            ParameterKind::Indicator => match value {
+                FieldValue::Bool(v) => Ok(FieldValue::Bool(*v ^ self.reverse_logic)),
+                FieldValue::Text(v) if v == "Y" || v == "N" => Ok(FieldValue::Bool((v == "Y") ^ self.reverse_logic)),
+                _ => Err(DeviceConnectorError::invalid("Indicator requires BOOL or Y/N")),
+            },
+            ParameterKind::Bits => match value {
+                FieldValue::Unsigned(v) => Ok(FieldValue::Unsigned(*v)),
+                FieldValue::Signed(v) if *v >= 0 => Ok(FieldValue::Unsigned(*v as u64)),
+                FieldValue::Text(s) => {
+                    let s = s.strip_prefix("0b").unwrap_or(s).replace([' ', '_'], "");
+                    Ok(FieldValue::Unsigned(
+                        u64::from_str_radix(&s, 2)
+                            .map_err(|_| DeviceConnectorError::invalid("Invalid binary string"))?,
+                    ))
+                }
+                _ => Err(DeviceConnectorError::invalid("Bitset requires an unsigned value")),
+            },
+            ParameterKind::Text => Ok(value.clone()),
+        }
+    }
+    pub fn encode(
+        &self,
+        value: &FieldValue,
+        kind: ParameterKind,
+        ty: PhysicalType,
+    ) -> Result<FieldValue, DeviceConnectorError> {
+        self.validate()?;
+        if kind == ParameterKind::Indicator {
+            return match value {
+                FieldValue::Bool(v) => Ok(FieldValue::Bool(*v ^ self.reverse_logic)),
+                _ => Err(DeviceConnectorError::invalid(
+                    "Indicator requires a boolean logical value",
+                )),
+            };
+        }
+        if kind == ParameterKind::Text {
+            return Ok(value.clone());
+        }
+        let mut n = value.decimal()?;
+        if kind == ParameterKind::Numeric {
+            n = self.clamp(n);
+            n = checked(checked(n.checked_sub(self.offset))?.checked_div(self.scale))?;
+            if let (Some(a), Some(b), Some(c), Some(d)) =
+                (self.logical_min, self.logical_max, self.physical_min, self.physical_max)
+            {
+                n = map(n, a, b, c, d)?;
+            }
+            n = self.round(n);
+        }
+        let invalid = || DeviceConnectorError::invalid("Value is outside the physical type range");
+        Ok(match ty {
+            PhysicalType::U8 | PhysicalType::U16 | PhysicalType::U32 | PhysicalType::U64 => {
+                let max = match ty {
+                    PhysicalType::U8 => u8::MAX as u64,
+                    PhysicalType::U16 => u16::MAX as u64,
+                    PhysicalType::U32 => u32::MAX as u64,
+                    _ => u64::MAX,
+                };
+                if !n.fract().is_zero() {
+                    return Err(invalid());
+                }
+                let v = u64::try_from(n).map_err(|_| invalid())?;
+                if v > max {
+                    return Err(invalid());
+                }
+                FieldValue::Unsigned(v)
+            }
+            PhysicalType::I8 | PhysicalType::I16 | PhysicalType::I32 | PhysicalType::I64 => {
+                let (min, max) = match ty {
+                    PhysicalType::I8 => (i8::MIN as i64, i8::MAX as i64),
+                    PhysicalType::I16 => (i16::MIN as i64, i16::MAX as i64),
+                    PhysicalType::I32 => (i32::MIN as i64, i32::MAX as i64),
+                    _ => (i64::MIN, i64::MAX),
+                };
+                if !n.fract().is_zero() {
+                    return Err(invalid());
+                }
+                let v = i64::try_from(n).map_err(|_| invalid())?;
+                if v < min || v > max {
+                    return Err(invalid());
+                }
+                FieldValue::Signed(v)
+            }
+            PhysicalType::F32 | PhysicalType::F64 => {
+                let v = n.to_string().parse::<f64>().map_err(|_| invalid())?;
+                if !v.is_finite() || (ty == PhysicalType::F32 && !(v as f32).is_finite()) {
+                    return Err(invalid());
+                }
+                FieldValue::Float(if ty == PhysicalType::F32 { (v as f32) as f64 } else { v })
+            }
+            _ => {
+                return Err(DeviceConnectorError::invalid(
+                    "Numeric mapping requires a numeric physical type",
+                ));
+            }
+        })
+    }
+}

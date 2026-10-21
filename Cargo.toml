@@ -1,0 +1,40 @@
+[package]
+name = "moqui-device-connector"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "CC0-1.0"
+publish = false
+
+[features]
+default = ["moqui", "mqtt", "opcua", "modbus", "sftp"]
+moqui = ["dep:moqui-core", "dep:moqui-lib", "dep:indexmap", "dep:jiff"]
+mqtt = ["dep:rumqttc"]
+opcua = ["dep:opcua"]
+modbus = ["dep:tokio-modbus"]
+sftp = ["dep:russh", "dep:russh-sftp"]
+
+[dependencies]
+moqui-core = { path = "../../../crates/moqui-core", default-features = false, optional = true }
+moqui-lib = { path = "../../../crates/moqui-lib", optional = true }
+indexmap = { version = "2", optional = true }
+jiff = { version = "0.2", optional = true }
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "fs", "macros"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+rust_decimal = { version = "1", features = ["serde-str"] }
+url = "2"
+tracing = "0.1"
+chrono = { version="0.4", default-features=false, features=["std"] }
+rumqttc = { version = "0.25.1", default-features = false, features = ["use-rustls"], optional = true }
+opcua = { package = "async-opcua", version = "0.19", features = ["client"], optional = true }
+tokio-modbus = { version = "0.17", default-features = false, features = ["tcp"], optional = true }
+russh = { version = "0.64", default-features = false, features = ["aws-lc-rs", "rsa"], optional = true }
+russh-sftp = { version = "3", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[workspace]
