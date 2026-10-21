@@ -23,10 +23,12 @@ Source references used for the initial implementation:
 | plc-log-consumer, plc-log-ingest | PlcLogServices.run#DeviceRequest: MQTT subscription + PLC batch decoder | explicit service per request; restored at startup like the other subscriptions |
 | plc-log-ingest-with-source | InboundServices.store#PlcLog, ParameterLog | exact Parameter ID; no inferred identity |
 | plc-log-ingest-without-source | InboundServices.store#PlcLog, DeviceLog | full event JSON |
-| transfer-file, transfer-device-content | FileServices.run#DeviceRequest with deviceContentId or transferFiles | native bytes, no base64 REST hop |
+| transfer-file, transfer-device-content | FileServices.run#DeviceRequest with deviceContentId or transferFiles; SFTP writes a .part file and renames it | native bytes, no base64 REST hop |
+| file.transfer.uri.2 (second destination) | moqui-device run#DeviceRequest: the requests with parentRequestName = the primary (the redundant PLC) get the same files | done; a failure there does not change the primary result |
 | after-store-callback | a SECA on InboundServices.store#Samples or store#PlcLog; moqui-device notify#DeviceRequestResult after writes, exports and transfers | done; no HTTP callback |
+| InboundErrorNotifier | notifier.rs in the persistence worker, InboundServices.notify#InboundState: a Moqui notification (topic DeviceGatewayInbound) after device_gateway_error_notification_seconds of failures, and on recovery | done |
 | run-device-config-export | moqui-device DeviceConfigServices.get#DeviceConfigExportFiles (the export SQL on the Entity Engine) and export#DeviceConfig, sent with FileServices | done |
-| dynamic startup restoration/group recursion | SubscriptionServices.start#Subscriptions from the service job start_DeviceGatewaySubscriptions; property device_gateway_restore_subscriptions | done: restores after a start, restarts lost subscriptions, never undoes an unsubscribe |
+| dynamic startup restoration/group recursion | SubscriptionServices.get#GatewayScope and get#StartupSubscriptions (the scope SQL of the former gateway: DgmpEdgeGateway groups, alive members recursively, controller purposes), start#Subscriptions from the service job start_DeviceGatewaySubscriptions; property device_gateway_device_id; a request outside the scope is refused | done: restores after a start, restarts lost subscriptions, never undoes an unsubscribe |
 | trajectory service | moqui-device TrajectoryPlannerServices.get#TrajectoryAxes and export#Trajectory, sent as one MQTT payload message | done; the original gateway never exposed its advertised trajectory endpoint |
 
 moqui-device on mr-moqui no longer has DeviceGatewayServices.xml or the

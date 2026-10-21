@@ -15,7 +15,7 @@
 #![cfg(feature = "opcua")]
 mod common;
 use moqui_device_gateway::{
-    backends::opcua::{OpcUaDeviceClient, from_variant, node_id, to_variant},
+    backends::opcua::{from_variant, node_id, to_variant, OpcUaDeviceClient},
     *,
 };
 use opcua::types::{NodeId, Variant};

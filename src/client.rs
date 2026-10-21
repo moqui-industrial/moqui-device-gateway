@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use std::{
     collections::HashMap,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     time::{Instant, SystemTime},
 };
@@ -170,9 +170,13 @@ impl DeviceGatewayFacade {
             let _guard = tokio::time::timeout_at(deadline.into(), self.lifecycle.lock())
                 .await
                 .map_err(|_| DeviceGatewayError::timeout(false))?;
-            if let Some(existing) = self.subscriptions.lock().await.get(&request.name)
-                && !existing.task.is_finished()
-            {
+            let running = self
+                .subscriptions
+                .lock()
+                .await
+                .get(&request.name)
+                .is_some_and(|existing| !existing.task.is_finished());
+            if running {
                 return Err(DeviceGatewayError::new(
                     ErrorKind::Busy,
                     "Request is already active; unsubscribe before replacing it",

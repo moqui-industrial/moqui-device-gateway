@@ -212,9 +212,7 @@ impl OpcUaDeviceClient {
             .await
             .map_err(|_| DeviceGatewayError::timeout(false))?;
         let key = r.connection.session_key();
-        if let Some(s) = sessions.get(&key)
-            && !s.task.is_finished()
-        {
+        if let Some(s) = sessions.get(&key).filter(|s| !s.task.is_finished()) {
             return Ok(s.clone());
         }
         let s = Arc::new(connect(r, deadline).await?);
@@ -333,22 +331,23 @@ impl DeviceClient for OpcUaDeviceClient {
                 tracing::error!(request=%req.name,error=%error,"OPC UA sample rejected");
                 return;
             }
-            if let Some(value_data) = value.value
-                && let Err(error) = sink.emit(SampleBatch {
-                    request_name: req.name.clone(),
-                    logging: req.logging,
-                    request: Some(req.clone()),
-                    samples: vec![Sample {
-                        device_id: req.device_id.clone(),
-                        log_value_kind: None,
-                        parameter_id: Some(value.parameter_id),
-                        value: value_data,
-                        source_time: value.source_time,
-                        received_time: SystemTime::now(),
-                        quality: value.quality,
-                    }],
-                })
-            {
+            let Some(value_data) = value.value else {
+                return;
+            };
+            if let Err(error) = sink.emit(SampleBatch {
+                request_name: req.name.clone(),
+                logging: req.logging,
+                request: Some(req.clone()),
+                samples: vec![Sample {
+                    device_id: req.device_id.clone(),
+                    log_value_kind: None,
+                    parameter_id: Some(value.parameter_id),
+                    value: value_data,
+                    source_time: value.source_time,
+                    received_time: SystemTime::now(),
+                    quality: value.quality,
+                }],
+            }) {
                 tracing::error!(request=%req.name,error=%error,"OPC UA sample not queued");
             }
         });

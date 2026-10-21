@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::{net::TcpStream, sync::Mutex};
 use tokio_modbus::{
-    client::{Context, Reader, Writer, tcp},
+    client::{tcp, Context, Reader, Writer},
     slave::Slave,
 };
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,7 +91,11 @@ pub struct ModbusDeviceClient {
 }
 fn transport(e: impl std::fmt::Display, writing: bool) -> DeviceGatewayError {
     let e = DeviceGatewayError::transport(format!("Modbus transport failed: {e}"));
-    if writing { e.uncertain() } else { e }
+    if writing {
+        e.uncertain()
+    } else {
+        e
+    }
 }
 fn reorder(w: &mut [u16], bytes: bool, words: bool) {
     if bytes {

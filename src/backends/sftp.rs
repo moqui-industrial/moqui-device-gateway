@@ -126,9 +126,11 @@ pub async fn transfer(
             return Err(DeviceGatewayError::timeout(!out.files.is_empty()));
         }
         let destination = format!("{directory}/{}", f.name);
-        // A failed or timed-out transfer can leave a partial remote file. It is never replayed.
+        // The file is written under a temporary name and renamed at the end, so the PLC never reads a partial
+        // recipe; a failed transfer can leave the temporary file, never a partial destination. It is not replayed.
+        let partial = format!("{directory}/.{}.part", f.name);
         let mut file = sftp
-            .create(&destination)
+            .create(&partial)
             .await
             .map_err(|_| DeviceGatewayError::transport("Cannot create SFTP file").uncertain())?;
         file.write_all(&f.bytes)
@@ -137,6 +139,13 @@ pub async fn transfer(
         file.shutdown()
             .await
             .map_err(|_| DeviceGatewayError::transport("Cannot close SFTP file").uncertain())?;
+        // SFTP v3 rename does not replace an existing file: remove the previous version first
+        if sftp.rename(partial.as_str(), destination.as_str()).await.is_err() {
+            let _ = sftp.remove_file(destination.as_str()).await;
+            sftp.rename(partial.as_str(), destination.as_str())
+                .await
+                .map_err(|_| DeviceGatewayError::transport("Cannot rename the SFTP file").uncertain())?;
+        }
         out.files.push(destination);
     }
     let _ = sftp.close().await;

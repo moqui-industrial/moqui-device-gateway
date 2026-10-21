@@ -1,7 +1,7 @@
 [package]
 name = "moqui-device-gateway"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 rust-version = "1.99"
 license = "CC0-1.0"
 publish = false
@@ -36,5 +36,7 @@ russh-sftp = { version = "3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# an in-process OPC UA server for the backend tests (tests/opcua_server.rs)
+opcua = { package = "async-opcua", version = "0.19", features = ["server", "client"] }
 
 [workspace]

@@ -32,14 +32,18 @@ reported in logs. The persistence queue is bounded at 1024 batches.
 The component does not establish worst-case latency bounds, hard real-time
 behavior, safety certification or actuator-level acknowledgement from MQTT.
 
-Local verification (2026-10-21): 27 tests passed with all default features and
-Clippy passed for all targets with warnings denied, against mr-moqui master
-9fe4b939 and Rust 1.99.1. The framework APIs the component uses (service calls,
-message facade error marks, JSON conversion) are unchanged at the CI revision
-ed07b11.
+Local verification (2026-10-21), mr-moqui master 9fe4b939 and the CI revision
+ed07b11 (`cargo test --locked`, `cargo clippy --locked -- -D warnings`), Rust
+1.99.1, edition 2021: 35 Rust tests, among them the OPC UA backend against an
+in-process async-opcua server (read, write, live subscription) and the
+persistence failure notice rules of the former InboundErrorNotifier.
 
-Component specs (2026-10-21): `./moq test moqui-device moqui-device-gateway` with
-`gateway_mqtt_test=1` passed 18 of 18 active features against a local Artemis
-broker, among them the HVAC demo end to end: 20 live parameters published by
-`HVAC_DEMO_LiveParametersWrite`, the PLC log subscription started, and a
-ParameterLogger event stored as a ParameterLog row.
+Component specs (`./moq test moqui-device moqui-device-gateway`): 29 of 29 active
+features with a local Artemis broker and an SFTP server, and the scope features
+with `device_gateway_device_id=GW_EDGE_01`. They port the scenarios of the former
+gateway tests: recipe text and trajectory recipe export, the redundant second
+destination, MQTT write, subscription ingestion and a burst of ten logged
+messages, the PLC log cases (numeric, text, no source, DT# date, mixed batch,
+malformed batch), the gateway scope and startup restoration with inactive
+memberships, the refusal of an out-of-scope request, the persistence failure and
+recovery notifications, an SFTP recipe export, and the HVAC demo end to end.

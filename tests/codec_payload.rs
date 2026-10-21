@@ -69,23 +69,19 @@ fn integer_and_json_precision() {
 #[test]
 fn invalid_values_never_silently_coerce() {
     let c = ValueCodec::default();
-    assert!(
-        c.encode(&FieldValue::Unsigned(256), ParameterKind::Numeric, PhysicalType::U8)
-            .is_err()
-    );
-    assert!(
-        c.encode(&FieldValue::Float(1.5), ParameterKind::Numeric, PhysicalType::I16)
-            .is_err()
-    );
+    assert!(c
+        .encode(&FieldValue::Unsigned(256), ParameterKind::Numeric, PhysicalType::U8)
+        .is_err());
+    assert!(c
+        .encode(&FieldValue::Float(1.5), ParameterKind::Numeric, PhysicalType::I16)
+        .is_err());
     assert!(c.decode(&FieldValue::Float(f64::NAN), ParameterKind::Numeric).is_err());
-    assert!(
-        ValueCodec {
-            scale: Decimal::ZERO,
-            ..c
-        }
-        .validate()
-        .is_err()
-    );
+    assert!(ValueCodec {
+        scale: Decimal::ZERO,
+        ..c
+    }
+    .validate()
+    .is_err());
 }
 #[test]
 fn indicator_reverse_is_symmetric() {

@@ -59,4 +59,29 @@ along with this software (see the LICENSE.md file). If not, see
             <parameter name="failedCount" type="Long"/>
         </out-parameters>
     </service>
+
+    <service verb="notify" noun="InboundState" authenticate="false">
+        <description>
+            Tells the user, with a Moqui notification on the topic DeviceGatewayInbound, that the samples of a
+            subscription or polling request have failed to store for device_gateway_error_notification_seconds
+            (inboundError), or store again after such a notice (inboundRecovered). Called by the persistence worker.
+        </description>
+        <in-parameters>
+            <parameter name="requestName" required="true"/>
+            <parameter name="deviceId" required="true"/>
+            <parameter name="eventType" required="true"><description>inboundError or inboundRecovered</description></parameter>
+            <parameter name="errorMessage"/>
+            <parameter name="errorDurationSeconds" type="Long"/>
+        </in-parameters>
+        <actions>
+            <set field="failing" from="eventType === 'inboundError'"/>
+            <service-call name="moqui.device.DeviceServices.send#DeviceNotification" in-map="{deviceId:deviceId,
+                    notificationTopic:'DeviceGatewayInbound', notificationType:(failing ? 'danger' : 'success'),
+                    notificationTitle:(failing ? 'Device data not stored' : 'Device data stored again') + ' (' + requestName + ')',
+                    message:failing ? ('The values of request ' + requestName + ' have not been stored for '
+                        + (errorDurationSeconds || 0) + ' s: ' + (errorMessage || 'unknown error'))
+                        : ('The values of request ' + requestName + ' are stored again after '
+                        + (errorDurationSeconds || 0) + ' s of errors.')}"/>
+        </actions>
+    </service>
 </services>

@@ -20,20 +20,20 @@ use crate::{
 };
 use async_trait::async_trait;
 use rumqttc::{
-    Transport,
     v5::{
-        AsyncClient, Event, EventLoop, MqttOptions,
         mqttbytes::{
-            QoS,
             v5::{Packet, PubAckReason, SubscribeReasonCode},
+            QoS,
         },
+        AsyncClient, Event, EventLoop, MqttOptions,
     },
+    Transport,
 };
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -110,7 +110,11 @@ async fn poll(events: &mut EventLoop, deadline: Instant, writing: bool) -> Resul
         .map_err(|_| DeviceGatewayError::timeout(writing))?
         .map_err(|_| {
             let e = DeviceGatewayError::transport("MQTT connection failed");
-            if writing { e.uncertain() } else { e }
+            if writing {
+                e.uncertain()
+            } else {
+                e
+            }
         })
 }
 async fn subscribe_topics(

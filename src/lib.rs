@@ -26,6 +26,7 @@ pub mod binding;
 pub mod client;
 pub mod codec;
 pub mod model;
+pub mod notifier;
 pub mod payload;
 #[cfg(feature = "moqui")]
 pub mod tool;
@@ -39,7 +40,7 @@ pub use tool::DeviceGatewayToolFactory;
 mod native {
     use moqui_core::{
         context::Error,
-        native::{NativeComponent, NativeRegistry, submit_component},
+        native::{submit_component, NativeComponent, NativeRegistry},
     };
     submit_component! { NativeComponent { name: "moqui-device-gateway", register } }
     fn register(registry: &mut NativeRegistry) -> Result<(), Error> {

@@ -15,7 +15,7 @@
 #![cfg(feature = "modbus")]
 mod common;
 use moqui_device_gateway::{
-    backends::modbus::{Address, decode_words, encode_words},
+    backends::modbus::{decode_words, encode_words, Address},
     codec::ValueCodec,
     *,
 };

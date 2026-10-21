@@ -19,4 +19,9 @@ along with this software (see the LICENSE.md file). If not, see
             description="Start the device gateway subscriptions (after a start, and those that lost their connection)"
             serviceName="moqui.device.gateway.SubscriptionServices.start#Subscriptions"
             cronExpression="0 * * * * ?" localOnly="Y" paused="N"/>
+
+    <!-- InboundServices.notify#InboundState: persistence failures and recoveries of the subscriptions -->
+    <moqui.security.user.NotificationTopic topic="DeviceGatewayInbound" description="Device Gateway Inbound Notifications"
+            typeString="${typeString}" showAlert="Y" persistOnSend="Y" receiveNotifications="Y" isPrivate="N"
+            titleTemplate="${titleText || message || 'Device gateway inbound notification'}"/>
 </entity-facade-xml>

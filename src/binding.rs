@@ -180,16 +180,15 @@ fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Resu
     if let Some(rest) = endpoint.strip_prefix("milo-client:") {
         endpoint = rest.to_string();
     }
-    if protocol == Protocol::OpcUa
-        && let Some((url, query)) = endpoint.split_once('?')
-    {
-        let url = url.to_string();
-        for (k, v) in parse_options(query)? {
-            if options.insert(k, v).is_some() {
-                return Err(Error::new("Duplicate OPC UA option"));
+    if protocol == Protocol::OpcUa {
+        if let Some((url, query)) = endpoint.clone().split_once('?') {
+            for (k, v) in parse_options(query)? {
+                if options.insert(k, v).is_some() {
+                    return Err(Error::new("Duplicate OPC UA option"));
+                }
             }
+            endpoint = url.to_string();
         }
-        endpoint = url;
     }
     let username = options.remove("username").or_else(|| options.remove("userName"));
     let password = options.remove("password");
@@ -339,6 +338,7 @@ pub fn prepare(
             service.service_name()
         )));
     }
+    check_gateway_scope(ec, &name, &device_id)?;
     if service == ServiceKind::PlcLog && !matches!(operation, Operation::Subscribe | Operation::Unsubscribe) {
         return Err(Error::new(
             "A PLC log request is a subscription (DrtSubscribe or DrtEvent) or DrtUnsubscribe",
@@ -441,7 +441,13 @@ pub fn prepare(
         }
         if let Some(id) = params.get("deviceContentId").and_then(Value::as_str) {
             let content = find(&ef, "moqui.device.DeviceContent", "deviceContentId", id, false)?;
-            if text(&content, "deviceId").as_deref() != Some(&device_id) {
+            let content_device = text(&content, "deviceId");
+            // A mirror request (parentRequestName, the second PLC of a redundant pair) sends its parent's content.
+            let parent_device = text(&r, "parentRequestName")
+                .map(|parent| find(&ef, "moqui.device.DeviceRequest", "requestName", &parent, true))
+                .transpose()?
+                .and_then(|parent| text(&parent, "deviceId"));
+            if content_device.as_deref() != Some(&device_id) && content_device != parent_device {
                 return Err(Error::new("DeviceContent belongs to a different device"));
             }
             let location = text(&content, "contentLocation")
@@ -726,11 +732,13 @@ fn persist_sample(
         )?;
         let kind = kind(&ef, &def)?;
         let width = policy.map_or(64, |p| p.width);
-        if !logging
-            && let Some(policy) = policy
-            && !policy.allow_duplicate
-            && let Ok(old) = logical_value(&p, kind)
-        {
+        let unchanged_check = match policy {
+            Some(policy) if !logging && !policy.allow_duplicate => {
+                logical_value(&p, kind).ok().map(|old| (policy, old))
+            }
+            _ => None,
+        };
+        if let Some((policy, old)) = unchanged_check {
             let same = if kind == ParameterKind::Numeric {
                 s.value
                     .decimal()
@@ -941,13 +949,88 @@ fn call_store(
         "samples".into(),
         Value::List(samples.iter().map(sample_to_value).collect::<Result<_, _>>()?),
     );
+    call_service(ec, service, &params)
+}
+/// Calls a service; an error it recorded in the message facade is an error here.
+fn call_service(ec: &ExecutionContext, service: &str, params: &Parameters) -> Result<Parameters, Error> {
     let mark = ec.message().error_mark();
-    let out = moqui_core::service::sync(service, &params)?;
+    let out = moqui_core::service::sync(service, params)?;
     let errors = ec.message().errors_since(mark);
     if !errors.is_empty() {
         return Err(Error::new(errors.join("\n")));
     }
     Ok(out)
+}
+/// The gateway this process is, from the property `device_gateway_device_id`; empty when not configured.
+pub fn gateway_device_id() -> String {
+    moqui_lib::env::get_prop_or_env("device_gateway_device_id")
+}
+/// With a configured gateway, a request runs only for a device in its scope: the DeviceGroups the gateway is a
+/// DgmpEdgeGateway member of, and their members, recursively (SubscriptionServices.get#GatewayScope).
+fn check_gateway_scope(ec: &ExecutionContext, request_name: &str, device_id: &str) -> Result<(), Error> {
+    let gateway = gateway_device_id();
+    if gateway.is_empty() {
+        return Ok(());
+    }
+    let mut params = Parameters::new();
+    params.insert("gatewayDeviceId".into(), Value::string(&gateway));
+    let scope = call_service(
+        ec,
+        "moqui.device.gateway.SubscriptionServices.get#GatewayScope",
+        &params,
+    )?;
+    if !matches!(scope.get("ready"), Some(Value::Bool(true))) {
+        return Err(Error::new(
+            scope
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("The gateway identity is not ready")
+                .to_string(),
+        ));
+    }
+    let in_scope = match scope.get("scopedDeviceIds") {
+        Some(Value::List(ids)) => ids.iter().any(|id| id.as_str() == Some(device_id)),
+        _ => false,
+    };
+    if !in_scope {
+        return Err(Error::new(format!(
+            "DeviceRequest {request_name} belongs to device {device_id}, which is not in the scope of gateway {gateway}"
+        )));
+    }
+    Ok(())
+}
+/// Tells the user that the samples of a request fail to store, or store again (InboundServices.notify#InboundState).
+pub(crate) fn notify_inbound(
+    ec: &ExecutionContext,
+    batch: &SampleBatch,
+    notice: &crate::notifier::Notice,
+    error_message: Option<String>,
+) -> Result<(), Error> {
+    let device_id = batch
+        .request
+        .as_ref()
+        .map(|r| r.device_id.clone())
+        .or_else(|| batch.samples.first().map(|s| s.device_id.clone()))
+        .ok_or_else(|| Error::new("The batch has no device"))?;
+    let (event, duration) = match notice {
+        crate::notifier::Notice::Failing(d) => ("inboundError", d),
+        crate::notifier::Notice::Recovered(d) => ("inboundRecovered", d),
+    };
+    // a failed store leaves its errors in the message facade, and a service does not run after errors
+    ec.message().clear_errors();
+    let mut params = Parameters::new();
+    params.insert("requestName".into(), Value::string(&batch.request_name));
+    params.insert("deviceId".into(), Value::string(device_id));
+    params.insert("eventType".into(), Value::string(event));
+    params.insert(
+        "errorDurationSeconds".into(),
+        Value::I64(i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)),
+    );
+    params.insert(
+        "errorMessage".into(),
+        error_message.map(Value::string).unwrap_or(Value::Null),
+    );
+    call_service(ec, "moqui.device.gateway.InboundServices.notify#InboundState", &params).map(|_| ())
 }
 /// The persistence worker's path: subscription and polling samples go through the store services.
 pub(crate) fn store_batch(ec: &ExecutionContext, batch: &SampleBatch) -> Result<(), Error> {

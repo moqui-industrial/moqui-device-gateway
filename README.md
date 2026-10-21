@@ -39,6 +39,9 @@ The other services of the component:
 |---|---|
 | `moqui.device.gateway.InboundServices.store#Samples` | Stores the values a device sent: the result of a read and the samples of a subscription or polling. A SECA on it is the after-store callback of the former gateway |
 | `moqui.device.gateway.InboundServices.store#PlcLog` | Stores PLC log events: ParameterLog for an event with a source, DeviceLog for the others |
+| `moqui.device.gateway.InboundServices.notify#InboundState` | Tells the user (topic `DeviceGatewayInbound`) that a request's values fail to store, and when they store again |
+| `moqui.device.gateway.SubscriptionServices.get#GatewayScope` | The identity and scope of a gateway: its DeviceGroups and their alive members |
+| `moqui.device.gateway.SubscriptionServices.get#StartupSubscriptions` | The subscriptions a gateway starts: those of the controllers in its scope, in order |
 | `moqui.device.gateway.SubscriptionServices.start#Subscriptions` | Restores the subscriptions after a start and restarts those that lost their connection |
 | `moqui.device.gateway.SubscriptionServices.get#SubscriptionState` | The subscriptions of this process: running, and ended without an unsubscribe |
 
@@ -60,7 +63,17 @@ uses the framework's sibling `moqui-core` and `moqui-lib` crates. It is not a
 standalone checkout with respect to Cargo path dependency resolution.
 
 Build using the framework's `./moq build`, which links native components, and
-load the seed data (the `start_DeviceGatewaySubscriptions` service job). Rust
+load the seed data (the `start_DeviceGatewaySubscriptions` service job and the
+`DeviceGatewayInbound` notification topic).
+
+### Properties
+
+| Property | Default | Use |
+|---|---|---|
+| `device_gateway_device_id` | empty | The gateway Device this instance is: a `PhysicalDevice` and a `DgmpEdgeGateway` member of its DeviceGroups. Set: the subscriptions of the controllers in its scope are restored after a start, and a request for a device outside its scope is refused. Empty: nothing is restored and no scope is checked |
+| `device_gateway_restore_subscriptions` | `true` | `false` on an instance that must not start the subscriptions |
+| `device_gateway_error_notification` | `true` | `false` turns off the persistence failure notifications |
+| `device_gateway_error_notification_seconds` | `60` | How long the values of a request fail to store before the user is told | Rust
 1.99 or later is required by this initial lockfile/toolchain baseline.
 
 ```sh
@@ -77,6 +90,13 @@ The MQTT features also need an MQTT 5 broker on 127.0.0.1:1883 with user
 ```sh
 MQTT_USERNAME=artemis MQTT_PASSWORD=artemis gateway_mqtt_test=1 ./moq test moqui-device-gateway
 ```
+
+More optional features: `device_gateway_error_notification_seconds=0` (the
+persistence failure notification), `device_gateway_device_id=GW_EDGE_01` (scope
+refusal and startup restoration), and `gateway_sftp_test=1` with
+`gateway_sftp_fingerprint=SHA256:...` for an SFTP server on 127.0.0.1:2223 (user
+`foo`/`pass`, directory `/upload`, for example the `atmoz/sftp` image). The Rust
+tests start their own OPC UA server (`tests/opcua_server.rs`).
 
 For a smaller transport-only build, use
 `cargo test --locked --no-default-features --features modbus,mqtt`.
@@ -149,10 +169,40 @@ service path as deterministic merely because it is written in Rust.
   and pretrusted server certificates. Username authentication requires
   `SignAndEncrypt`.
 * Files: `brokerUri=file:/absolute/directory` or `sftp://host:22/directory`.
-  SFTP requires `host-key-fingerprint=SHA256:...` plus credentials. Optional
-  `private-key-file` names an unencrypted private key file. The remote directory
-  must exist. SFTP writes can leave a partial file on failure; delivery is not
-  atomic as it is for a local rename.
+  SFTP requires `host-key-fingerprint=SHA256:...` plus credentials in the
+  `DeviceConnection` options (driver `DcdSftp`), for example
+  `usernameEnv=PLC_SFTP_USER&passwordEnv=PLC_SFTP_PASSWORD&host-key-fingerprint=SHA256:...`;
+  optional `private-key-file` names an unencrypted private key file. The remote
+  directory must exist. Each file is written as `.<name>.part` and renamed, so
+  the PLC never reads a partial file (an interrupted transfer can leave only the
+  `.part` file).
+
+### Recipes to a CODESYS PLC over SFTP
+
+A CODESYS Control runtime on Linux (or any PLC with an SSH server) receives the
+recipe files of moqui-device's `export#DeviceConfig` in its recipe directory:
+
+```xml
+<moqui.device.DeviceConnection connectionName="PLC1_SFTP" deviceId="PLC1" driverEnumId="DcdSftp"
+        connectionTypeEnumId="DctDirectConnection" purposeEnumId="DcpMaintenance"
+        options="usernameEnv=PLC1_SFTP_USER&amp;passwordEnv=PLC1_SFTP_PASSWORD&amp;host-key-fingerprint=SHA256:..."/>
+<moqui.device.DeviceRequest requestName="PLC1_ExportProcess" deviceId="PLC1" requestTypeEnumId="DrtConfigWrite"
+        routerEnumId="DrrDirect" runServiceName="moqui.device.gateway.FileServices.run#DeviceRequest"
+        connectionName="PLC1_SFTP" brokerUri="sftp://plc1.factory.local:22/var/opt/codesys/PlcLogic/recipes"
+        query="PLC1_RuleSet" timeout="30000"/>
+```
+
+Read the fingerprint with `ssh-keyscan -t ed25519 plc1.factory.local | ssh-keygen -lf -`.
+
+### Redundant PLCs
+
+The second PLC of a redundant pair gets its own `DeviceRequest`, with its
+endpoint and `parentRequestName` = the request of the first PLC. After a
+completed recipe export (`DrtConfigWrite`) or content transfer
+(`DrtContentTransfer`), moqui-device's `run#DeviceRequest` sends the same files
+there; a failure on the second PLC does not change the first one's result and is
+in `secondaryResults` and in its own notification. The second request may send
+the DeviceContent of its parent's device.
 
 An item without `itemTypeEnumId` gets its physical type from the kind of its
 parameter: a decimal number as a 64-bit float, an indicator as a boolean, a bit
@@ -201,13 +251,20 @@ is local to the mr-moqui process: run one assigned owner for a field device;
 sharing a database does not coordinate sessions across hosts.
 
 mr-moqui has no startup hook, so the service job `start_DeviceGatewaySubscriptions`
-calls `start#Subscriptions` every minute. Its first run in a process starts every
-active `DrtSubscribe`, `DrtEvent`, `DrtStateChange` and `DrtCyclic` request whose
-`runServiceName` is a service of this component; later runs restart only the
-subscriptions that ended without an unsubscribe, such as an MQTT subscription
-whose connection was lost. An unsubscribed request stays stopped. Set the
-property `device_gateway_restore_subscriptions=false` on an instance that must
-not own the subscriptions. No write is ever replayed.
+calls `start#Subscriptions` every minute. Its first run in a process starts the
+subscriptions of the gateway `device_gateway_device_id`: the active
+`DrtSubscribe`, `DrtEvent`, `DrtStateChange` and `DrtCyclic` requests, run by a
+service of this component, of the controllers in its scope (members with purpose
+`DgmpProcessPLC`, `DgmpSafetyPLC`, `DgmpController`, `DgmpMotionController` or a
+remote I/O purpose, in the DeviceGroups the gateway is a `DgmpEdgeGateway`
+member of, recursively, with membership status empty or `DgmsAlive`), ordered by
+priority and sequenceNum. Later runs restart only the subscriptions that ended
+without an unsubscribe, such as an MQTT subscription whose connection was lost.
+An unsubscribed request stays stopped. No write is ever replayed.
+
+When the values of a subscription or polling request fail to store for
+`device_gateway_error_notification_seconds`, the user gets one notification on the
+topic `DeviceGatewayInbound`, and another when they store again.
 
 `DrpLogging` writes logs; a missing purpose updates current Parameter values.
 `PlcLogServices.run#DeviceRequest` subscribes to PLC LoggerFacade batches: it

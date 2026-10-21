@@ -25,9 +25,8 @@ use moqui_core::{
 use moqui_lib::object::Value;
 use std::{
     sync::{
-        Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc, Arc, Mutex, Weak,
     },
     thread::JoinHandle,
     time::Duration,
@@ -124,16 +123,27 @@ impl ToolFactory for DeviceGatewayToolFactory {
         if let Some(state) = state {
             state.runtime.block_on(state.facade.close());
             state.stop.store(true, Ordering::Release);
-            if let Ok(mut w) = state.worker.lock()
-                && let Some(w) = w.take()
-                && w.join().is_err()
-            {
+            let worker = state.worker.lock().ok().and_then(|mut w| w.take());
+            if worker.is_some_and(|w| w.join().is_err()) {
                 tracing::error!("Device gateway persistence worker panicked");
             }
         }
     }
 }
+/// Persistence failure notices: `device_gateway_error_notification=false` turns them off, and
+/// `device_gateway_error_notification_seconds` (default 60) is how long the failures of a request last before the
+/// user is told.
+fn inbound_errors() -> Option<crate::notifier::InboundErrors> {
+    if moqui_lib::env::get_prop_or_env("device_gateway_error_notification") == "false" {
+        return None;
+    }
+    let seconds = moqui_lib::env::get_prop_or_env("device_gateway_error_notification_seconds")
+        .parse::<u64>()
+        .unwrap_or(60);
+    Some(crate::notifier::InboundErrors::new(Duration::from_secs(seconds)))
+}
 fn persist_loop(factory: Weak<ExecutionContextFactory>, receiver: mpsc::Receiver<SampleBatch>, stop: Arc<AtomicBool>) {
+    let mut errors = inbound_errors();
     loop {
         match receiver.recv_timeout(Duration::from_millis(100)) {
             Ok(batch) => {
@@ -143,8 +153,22 @@ fn persist_loop(factory: Weak<ExecutionContextFactory>, receiver: mpsc::Receiver
                 let ec = factory.new_context();
                 let _entered = ec.enter();
                 let _auth = ec.disable_authz();
-                if let Err(error) = crate::binding::store_batch(&ec, &batch) {
+                let stored = crate::binding::store_batch(&ec, &batch);
+                if let Err(error) = &stored {
                     tracing::error!(request=%batch.request_name,error=%error,"Device gateway samples were not saved");
+                }
+                if let Some(errors) = errors.as_mut() {
+                    let now = std::time::Instant::now();
+                    let notice = match &stored {
+                        Ok(()) => errors.clear(&batch.request_name, now),
+                        Err(_) => errors.record_error(&batch.request_name, now),
+                    };
+                    if let Some(notice) = notice {
+                        let message = stored.as_ref().err().map(|e| e.to_string());
+                        if let Err(error) = crate::binding::notify_inbound(&ec, &batch, &notice, message) {
+                            tracing::error!(request=%batch.request_name,error=%error,"Persistence notice not sent");
+                        }
+                    }
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) if stop.load(Ordering::Acquire) => break,

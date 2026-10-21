@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use moqui_device_gateway::*;
 use std::{
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -189,11 +189,10 @@ async fn partial_read_decodes_successes_and_marks_missing_items() {
     f.install(Protocol::ModbusTcp, Arc::new(PartialReader));
     let f = Arc::new(f);
     let mut out = RequestOutput::default();
-    assert!(
-        f.execute(r.clone(), &RequestInput::default(), &mut out, r.deadline(), None)
-            .await
-            .is_err()
-    );
+    assert!(f
+        .execute(r.clone(), &RequestInput::default(), &mut out, r.deadline(), None)
+        .await
+        .is_err());
     assert_eq!(out.items[0].value, Some(FieldValue::Decimal(20u32.into())));
     assert_eq!(out.items[1].status, ItemStatus::Failed);
     assert_eq!(out.outcome(), ExecutionOutcome::Partial);
