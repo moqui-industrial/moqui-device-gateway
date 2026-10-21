@@ -5,6 +5,7 @@
 //     MQTT_USERNAME=artemis MQTT_PASSWORD=artemis (HVACDemoGatewayData.xml reads them);
 //   device_gateway_error_notification_seconds=0 with gateway_mqtt_test: the persistence failure notification;
 //   device_gateway_device_id=GW_EDGE_01: requests outside the gateway scope are refused;
+//   gateway_opcua_test=1: the OPC UA server of `cargo run --example opcua_test_server` on 127.0.0.1:12686;
 //   gateway_sftp_test=1: an SFTP server on 127.0.0.1:2223, user foo/pass, directory /upload, whose host key
 //     fingerprint (SHA256:...) is in gateway_sftp_fingerprint.
 // Files go to /tmp/moqui-gateway-spec.
@@ -539,14 +540,84 @@ feature("the first start#Subscriptions restores the scoped subscriptions once", 
         const state = call("moqui.device.gateway.SubscriptionServices.get#SubscriptionState", {});
         const second = call("moqui.device.gateway.SubscriptionServices.start#Subscriptions", {});
         call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcMqttUnsubscribeReq01"});
-        return {first, state, second};
+        if (first.startedRequestNames.includes("TestPlcOpcUaReadReq01")) {
+            call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcOpcUaUnsubscribeReq01"});
+        }
+        return {first, state, second, opcua: !!System.getProperty("gateway_opcua_test")};
     },
     then(out) {
         out.first.startedRequestNames.includes("TestPlcMqttSubscribeReq01");
-        // no OPC UA server in this run
-        out.first.failedRequestNames.includes("TestPlcOpcUaReadReq01");
+        // the OPC UA subscription starts only with the OPC UA test server
+        (out.opcua ? out.first.startedRequestNames : out.first.failedRequestNames).includes("TestPlcOpcUaReadReq01");
         out.state.activeRequestNames.includes("TestPlcMqttSubscribeReq01");
         out.second.startedRequestNames.length == 0;
         out.second.failedRequestNames.length == 0;
+    },
+});
+
+const parameterNumber = (parameterId) => ec.entity.find("moqui.math.Parameter").condition("parameterId", parameterId)
+    .useCache(false).one().numericValue?.toNumber();
+const writeReference = (value) => {
+    call("update#moqui.math.Parameter", {parameterId: "TestPlcReferenceParam", numericValue: value});
+    return call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcOpcUaWriteReq01"});
+};
+
+feature("OPC UA write and one-shot read go through the node into the parameters", {
+    ignore: !System.getProperty("gateway_opcua_test"),
+    when() {
+        const write = writeReference(123.5);
+        const read = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcOpcUaOneshotReq01"});
+        return {write, read, feedback: parameterNumber("TestPlcFeedbackParam")};
+    },
+    then(out) {
+        out.write.status == "completed";
+        out.read.status == "completed" || out.read.status == "unchanged";
+        out.feedback == 123.5;
+    },
+    cleanup() { call("update#moqui.math.Parameter", {parameterId: "TestPlcReferenceParam", numericValue: 300}); },
+});
+
+feature("OPC UA polling stores the node changes until the unsubscribe", {
+    ignore: !System.getProperty("gateway_opcua_test"),
+    when() {
+        const started = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcOpcUaReadReq01"});
+        writeReference(124.5);
+        const stored = waitFor(() => parameterNumber("TestPlcFeedbackParam") === 124.5);
+        const fault = ec.entity.find("moqui.math.Parameter").condition("parameterId", "TestPlcFaultParam").useCache(false).one();
+        const stopped = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcOpcUaUnsubscribeReq01"});
+        return {started, stored, fault, stopped};
+    },
+    then(out) {
+        out.started.status == "active";
+        out.stored == true;
+        out.stopped.status == "completed";
+    },
+    cleanup() { call("update#moqui.math.Parameter", {parameterId: "TestPlcReferenceParam", numericValue: 300}); },
+});
+
+feature("an OPC UA monitored item stores the live node value", {
+    ignore: !System.getProperty("gateway_opcua_test"),
+    when() {
+        storeRequest({requestName: "GatewayTestOpcUaMonitor", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
+            routerEnumId: "DrrDirect", runServiceName: "moqui.device.gateway.OpcUaServices.run#DeviceRequest",
+            connectionName: "TestPlcOpcUaConn01"});
+        call("store#moqui.device.DeviceRequestItem", {requestName: "GatewayTestOpcUaMonitor", requestItemName: "virtualPlcFeedback",
+            parameterId: "TestPlcFeedbackParam", sequenceNum: 10, query: "ns=2;s=Demo.Dynamic.Scalar.Double", itemTypeEnumId: "DritLReal"});
+        storeRequest({requestName: "GatewayTestOpcUaMonitorStop", parentRequestName: "GatewayTestOpcUaMonitor", deviceId: "VIRTUAL_PLC_01",
+            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrDirect", runServiceName: "moqui.device.gateway.OpcUaServices.run#DeviceRequest",
+            connectionName: "TestPlcOpcUaConn01"});
+        const started = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestOpcUaMonitor"});
+        writeReference(125.5);
+        const stored = waitFor(() => parameterNumber("TestPlcFeedbackParam") === 125.5);
+        call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestOpcUaMonitorStop"});
+        return {started, stored};
+    },
+    then(out) {
+        out.started.status == "active";
+        out.stored == true;
+    },
+    cleanup() {
+        deleteRequests("GatewayTestOpcUaMonitorStop", "GatewayTestOpcUaMonitor");
+        call("update#moqui.math.Parameter", {parameterId: "TestPlcReferenceParam", numericValue: 300});
     },
 });

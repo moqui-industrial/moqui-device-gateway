@@ -51,7 +51,8 @@ pub async fn transfer(
         .get("host-key-fingerprint")
         .filter(|v| v.starts_with("SHA256:"))
         .ok_or_else(|| DeviceGatewayError::invalid("SFTP requires a pinned SHA256: host-key-fingerprint"))?
-        .clone();
+        // the query-string options decode an unescaped '+' of the base64 fingerprint as a space
+        .replace(' ', "+");
     let url = url::Url::parse(&c.endpoint).map_err(|_| DeviceGatewayError::invalid("Invalid SFTP endpoint"))?;
     if url.scheme() != "sftp"
         || !url.username().is_empty()

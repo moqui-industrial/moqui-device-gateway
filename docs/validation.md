@@ -38,12 +38,15 @@ ed07b11 (`cargo test --locked`, `cargo clippy --locked -- -D warnings`), Rust
 in-process async-opcua server (read, write, live subscription) and the
 persistence failure notice rules of the former InboundErrorNotifier.
 
-Component specs (`./moq test moqui-device moqui-device-gateway`): 29 of 29 active
-features with a local Artemis broker and an SFTP server, and the scope features
-with `device_gateway_device_id=GW_EDGE_01`. They port the scenarios of the former
-gateway tests: recipe text and trajectory recipe export, the redundant second
-destination, MQTT write, subscription ingestion and a burst of ten logged
+Component specs (`./moq test moqui-device moqui-device-gateway`): 38 of 38 active
+features with a local Artemis broker, the OPC UA test server of
+`examples/opcua_test_server.rs`, an SFTP server and the inference HTTP fixture of
+moqui-device; 32 of 32 with `device_gateway_device_id=GW_EDGE_01`; the 3 native
+ONNX features with the `onnx` build feature. They port the scenarios of the
+former gateway tests: recipe text and trajectory recipe export, the redundant
+second destination, MQTT write, subscription ingestion and a burst of ten logged
 messages, the PLC log cases (numeric, text, no source, DT# date, mixed batch,
-malformed batch), the gateway scope and startup restoration with inactive
+malformed batch), OPC UA write, one-shot read, polling and monitored item into
+the Parameter records, the gateway scope and startup restoration with inactive
 memberships, the refusal of an out-of-scope request, the persistence failure and
 recovery notifications, an SFTP recipe export, and the HVAC demo end to end.

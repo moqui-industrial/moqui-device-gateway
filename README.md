@@ -93,7 +93,9 @@ MQTT_USERNAME=artemis MQTT_PASSWORD=artemis gateway_mqtt_test=1 ./moq test moqui
 
 More optional features: `device_gateway_error_notification_seconds=0` (the
 persistence failure notification), `device_gateway_device_id=GW_EDGE_01` (scope
-refusal and startup restoration), and `gateway_sftp_test=1` with
+refusal and startup restoration), `gateway_opcua_test=1` with the OPC UA test
+server of `cargo run --example opcua_test_server` (127.0.0.1:12686/milo, the
+nodes of DeviceTestData.xml), and `gateway_sftp_test=1` with
 `gateway_sftp_fingerprint=SHA256:...` for an SFTP server on 127.0.0.1:2223 (user
 `foo`/`pass`, directory `/upload`, for example the `atmoz/sftp` image). The Rust
 tests start their own OPC UA server (`tests/opcua_server.rs`).
@@ -193,6 +195,7 @@ recipe files of moqui-device's `export#DeviceConfig` in its recipe directory:
 ```
 
 Read the fingerprint with `ssh-keyscan -t ed25519 plc1.factory.local | ssh-keygen -lf -`.
+A `+` of the fingerprint may be written as it is or as `%2B`.
 
 ### Redundant PLCs
 

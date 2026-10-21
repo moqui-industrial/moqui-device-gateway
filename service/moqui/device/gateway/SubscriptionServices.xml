@@ -46,49 +46,56 @@ along with this software (see the LICENSE.md file). If not, see
             <parameter name="scopedDeviceIds" type="List"/>
             <parameter name="controllerDeviceIds" type="List"/>
         </out-parameters>
-        <actions><script><![CDATA[
-            gatewayDeviceId = gatewayDeviceId || System.getProperty("device_gateway_device_id") || null;
-            ready = false;
-            scopedDeviceIds = [];
-            controllerDeviceIds = [];
-            if (!gatewayDeviceId) {
-                message = "No gateway identity: set the property device_gateway_device_id.";
-                return;
-            }
-            const device = ec.entity.find("moqui.device.Device").condition("deviceId", gatewayDeviceId).one();
-            const physical = ec.entity.find("moqui.device.PhysicalDevice").condition("deviceId", gatewayDeviceId).one();
-            if (!device || !physical) {
-                message = `Configured gateway ${gatewayDeviceId} does not exist as Device + PhysicalDevice.`;
-                return;
-            }
-            const alive = (member) => member.statusId == null || member.statusId === 'DgmsAlive';
-            const roots = (ec.entity.find("moqui.device.DeviceGroupMember").condition("memberDeviceId", gatewayDeviceId)
-                .condition("purposeEnumId", "DgmpEdgeGateway").list() || []).filter(alive).map(m => m.deviceId);
-            if (roots.length === 0) {
-                message = `Gateway ${gatewayDeviceId} is not assigned to any DeviceGroup as DgmpEdgeGateway.`;
-                return;
-            }
-            const controllerPurposes = ['DgmpProcessPLC', 'DgmpSafetyPLC', 'DgmpController', 'DgmpMotionController',
-                'DgmpRemoteIO', 'DgmpSafetyRemoteIO', 'DgmpExtremeConditionRemoteIO'];
-            const visible = new Set(roots);
-            const controllers = new Set();
-            const pending = [...roots];
-            while (pending.length) {
-                const groupId = pending.shift();
-                for (const member of (ec.entity.find("moqui.device.DeviceGroupMember").condition("deviceId", groupId).list() || [])) {
-                    if (!alive(member)) continue;
-                    if (controllerPurposes.includes(member.purposeEnumId)) controllers.add(member.memberDeviceId);
-                    if (!visible.has(member.memberDeviceId)) {
-                        visible.add(member.memberDeviceId);
-                        pending.push(member.memberDeviceId);
-                    }
-                }
-            }
-            scopedDeviceIds = [...visible];
-            controllerDeviceIds = [...controllers];
-            ready = true;
-            message = "ready";
-        ]]></script></actions>
+        <actions>
+            <set field="gatewayDeviceId" from="gatewayDeviceId || System.getProperty('device_gateway_device_id') || null"/>
+            <set field="ready" from="false"/>
+            <set field="scopedDeviceIds" from="[]"/>
+            <set field="controllerDeviceIds" from="[]"/>
+            <if condition="!gatewayDeviceId">
+                <set field="message" value="No gateway identity: set the property device_gateway_device_id."/>
+                <return/>
+            </if>
+            <entity-find-one entity-name="moqui.device.Device" value-field="device">
+                <field-map field-name="deviceId" from="gatewayDeviceId"/>
+            </entity-find-one>
+            <entity-find-one entity-name="moqui.device.PhysicalDevice" value-field="physicalDevice">
+                <field-map field-name="deviceId" from="gatewayDeviceId"/>
+            </entity-find-one>
+            <if condition="!device || !physicalDevice">
+                <set field="message" value="Configured gateway ${gatewayDeviceId} does not exist as Device + PhysicalDevice."/>
+                <return/>
+            </if>
+            <entity-find entity-name="moqui.device.DeviceGroupMember" list="gatewayMemberships">
+                <econdition field-name="memberDeviceId" from="gatewayDeviceId"/>
+                <econdition field-name="purposeEnumId" value="DgmpEdgeGateway"/>
+            </entity-find>
+            <set field="pendingGroupIds" from="gatewayMemberships.filter((member => member.statusId == null || member.statusId === 'DgmsAlive')).map(member => member.deviceId)"/>
+            <if condition="!pendingGroupIds.length">
+                <set field="message" value="Gateway ${gatewayDeviceId} is not assigned to any DeviceGroup as DgmpEdgeGateway."/>
+                <return/>
+            </if>
+            <set field="controllerPurposes" from="['DgmpProcessPLC', 'DgmpSafetyPLC', 'DgmpController', 'DgmpMotionController',
+                'DgmpRemoteIO', 'DgmpSafetyRemoteIO', 'DgmpExtremeConditionRemoteIO']"/>
+            <set field="scopedDeviceIds" from="[...pendingGroupIds]"/>
+            <!-- the groups of the gateway and their alive members, recursively -->
+            <while condition="pendingGroupIds.length">
+                <set field="groupId" from="pendingGroupIds.shift()"/>
+                <entity-find entity-name="moqui.device.DeviceGroupMember" list="members">
+                    <econdition field-name="deviceId" from="groupId"/>
+                </entity-find>
+                <iterate list="members.filter((member => member.statusId == null || member.statusId === 'DgmsAlive'))" entry="member">
+                    <if condition="controllerPurposes.includes(member.purposeEnumId) &amp;&amp; !controllerDeviceIds.includes(member.memberDeviceId)">
+                        <set field="controllerDeviceIds" from="controllerDeviceIds.concat([member.memberDeviceId])"/>
+                    </if>
+                    <if condition="!scopedDeviceIds.includes(member.memberDeviceId)">
+                        <set field="scopedDeviceIds" from="scopedDeviceIds.concat([member.memberDeviceId])"/>
+                        <set field="pendingGroupIds" from="pendingGroupIds.concat([member.memberDeviceId])"/>
+                    </if>
+                </iterate>
+            </while>
+            <set field="ready" from="true"/>
+            <set field="message" value="ready"/>
+        </actions>
     </service>
 
     <service verb="get" noun="StartupSubscriptions" authenticate="false">
@@ -106,25 +113,27 @@ along with this software (see the LICENSE.md file). If not, see
             <parameter name="message"/>
             <parameter name="requestNames" type="List"/>
         </out-parameters>
-        <actions><script><![CDATA[
-            const scope = ec.service.sync().name("moqui.device.gateway.SubscriptionServices.get#GatewayScope")
-                .parameters({gatewayDeviceId: gatewayDeviceId}).call();
-            gatewayDeviceId = scope.gatewayDeviceId;
-            ready = scope.ready;
-            message = scope.message;
-            requestNames = [];
-            if (!ready) return;
-            const controllers = new Set(scope.controllerDeviceIds || []);
-            const types = ['DrtSubscribe', 'DrtEvent', 'DrtStateChange', 'DrtCyclic'];
-            const toNumber = (value) => value == null ? 999999 :
-                (typeof value.toNumber === 'function' ? value.toNumber() : Number(value));
-            requestNames = (ec.entity.find("moqui.device.DeviceRequest").conditionDate("fromDate", "thruDate").list() || [])
-                .filter(r => controllers.has(r.deviceId) && types.includes(r.requestTypeEnumId)
-                    && (r.runServiceName || '').startsWith('moqui.device.gateway.'))
-                .sort((a, b) => (toNumber(a.priority) - toNumber(b.priority)) || (toNumber(a.sequenceNum) - toNumber(b.sequenceNum))
-                    || (a.requestName < b.requestName ? -1 : (a.requestName > b.requestName ? 1 : 0)))
-                .map(r => r.requestName);
-        ]]></script></actions>
+        <actions>
+            <service-call name="moqui.device.gateway.SubscriptionServices.get#GatewayScope" out-map="scope"
+                    in-map="{gatewayDeviceId:gatewayDeviceId}"/>
+            <set field="gatewayDeviceId" from="scope.gatewayDeviceId"/>
+            <set field="ready" from="scope.ready"/>
+            <set field="message" from="scope.message"/>
+            <set field="requestNames" from="[]"/>
+            <if condition="!ready"><return/></if>
+            <entity-find entity-name="moqui.device.DeviceRequest" list="requestList">
+                <econdition field-name="deviceId" operator="in" from="scope.controllerDeviceIds"/>
+                <econdition field-name="requestTypeEnumId" operator="in" from="['DrtSubscribe', 'DrtEvent', 'DrtStateChange', 'DrtCyclic']"/>
+                <econdition field-name="runServiceName" operator="like" value="moqui.device.gateway.%"/>
+                <date-filter/>
+            </entity-find>
+            <!-- no priority or sequenceNum sorts last, as COALESCE(..., 999999) did -->
+            <set field="requestNames" from="Array.from(requestList).sort((a, b) => {
+                    const key = value => value == null ? 999999 : (typeof value.toNumber === 'function' ? value.toNumber() : Number(value));
+                    return (key(a.priority) - key(b.priority)) || (key(a.sequenceNum) - key(b.sequenceNum))
+                        || (a.requestName &lt; b.requestName ? -1 : (a.requestName > b.requestName ? 1 : 0));
+                }).map(r => r.requestName)"/>
+        </actions>
     </service>
 
     <service verb="start" noun="Subscriptions" authenticate="false" transaction="ignore">
@@ -142,39 +151,38 @@ along with this software (see the LICENSE.md file). If not, see
             <parameter name="startedRequestNames" type="List"/>
             <parameter name="failedRequestNames" type="List"/>
         </out-parameters>
-        <actions><script><![CDATA[
-            startedRequestNames = [];
-            failedRequestNames = [];
-            if (System.getProperty("device_gateway_restore_subscriptions") === "false") return;
-            const state = ec.service.sync().name("moqui.device.gateway.SubscriptionServices.get#SubscriptionState")
-                .parameters({claimStartup: true}).call();
-            if (ec.message.hasError()) return;
-            let names = state.droppedRequestNames || [];
-            if (state.startupClaimed) {
-                const startup = ec.service.sync().name("moqui.device.gateway.SubscriptionServices.get#StartupSubscriptions")
-                    .parameters({}).call();
-                if (!startup.ready) {
-                    ec.logger.warn(`Device gateway subscriptions are not restored: ${startup.message}`);
-                } else {
-                    const active = new Set(state.activeRequestNames || []);
-                    names = names.concat((startup.requestNames || []).filter(n => !active.has(n) && !names.includes(n)));
-                }
-            }
-            for (const requestName of names) {
-                try {
-                    ec.service.sync().name("moqui.device.DeviceServices.run#DeviceRequest")
-                        .parameters({requestName: requestName}).call();
-                    if (ec.message.hasError()) throw new Error(ec.message.getErrorsString());
-                    startedRequestNames.push(requestName);
-                } catch (e) {
-                    failedRequestNames.push(requestName);
-                    ec.logger.warn(`Device gateway subscription ${requestName} did not start: ${e.message || e}`);
-                    ec.message.clearErrors();
-                }
-            }
-            if (startedRequestNames.length || failedRequestNames.length) {
-                ec.logger.info(`Device gateway subscriptions started: ${startedRequestNames.length}, failed: ${failedRequestNames.length}`);
-            }
-        ]]></script></actions>
+        <actions>
+            <set field="startedRequestNames" from="[]"/>
+            <set field="failedRequestNames" from="[]"/>
+            <if condition="System.getProperty('device_gateway_restore_subscriptions') === 'false'"><return/></if>
+            <service-call name="moqui.device.gateway.SubscriptionServices.get#SubscriptionState" out-map="state"
+                    in-map="{claimStartup:true}"/>
+            <set field="requestNames" from="state.droppedRequestNames || []"/>
+            <if condition="state.startupClaimed">
+                <service-call name="moqui.device.gateway.SubscriptionServices.get#StartupSubscriptions" out-map="startup"/>
+                <if condition="startup.ready"><then>
+                    <set field="activeNames" from="state.activeRequestNames || []"/>
+                    <set field="requestNames" from="requestNames.concat((startup.requestNames || [])
+                        .filter(name => !activeNames.includes(name) &amp;&amp; !requestNames.includes(name)))"/>
+                </then><else>
+                    <log level="warn" message="Device gateway subscriptions are not restored: ${startup.message}"/>
+                </else></if>
+            </if>
+            <iterate list="requestNames" entry="requestName">
+                <!-- a request that does not start is logged by ignore-error and the others still start -->
+                <set field="startOut" from="null"/>
+                <service-call name="moqui.device.DeviceServices.run#DeviceRequest" out-map="startOut" ignore-error="true"
+                        in-map="{requestName:requestName}"/>
+                <if condition="['active', 'completed'].includes(startOut?.status)"><then>
+                    <set field="startedRequestNames" from="startedRequestNames.concat([requestName])"/>
+                </then><else>
+                    <set field="failedRequestNames" from="failedRequestNames.concat([requestName])"/>
+                    <log level="warn" message="Device gateway subscription ${requestName} did not start"/>
+                </else></if>
+            </iterate>
+            <if condition="startedRequestNames.length || failedRequestNames.length">
+                <log level="info" message="Device gateway subscriptions started: ${startedRequestNames.length}, failed: ${failedRequestNames.length}"/>
+            </if>
+        </actions>
     </service>
 </services>

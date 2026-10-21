@@ -16,7 +16,7 @@ Source references used for the initial implementation:
 | --- | --- | --- |
 | dispatch-device-request | one run#DeviceRequest per protocol (Mqtt, OpcUa, Modbus, File, PlcLog Services) over DeviceGatewayFacade | DeviceRequest.runServiceName selects the service; no route interpreter |
 | mqtt-read-device-request-consumer, mqtt-read-device-request | MQTT backend and JSON normalization | supported JSON scalar/object/list reads; not arbitrary Camel transforms |
-| opcua-read-device-request-consumer, opcua-read-device-request | OPC UA backend | typed reads, monitored items and polling |
+| opcua-read-device-request-consumer, opcua-read-device-request | OpcUaServices.run#DeviceRequest | typed reads, writes, monitored items and polling, tested into the Parameter records against an OPC UA server (examples/opcua_test_server.rs) |
 | store-device-request-inbound | InboundServices.store#Samples | Entity Engine; scoped existing identities |
 | store-parameter-batch | bounded persistence worker calling store#Samples | current values, conversion, duplicate/tolerance policy of the DeviceRequestItem |
 | store-log-batch | same worker | ParameterLog, original PLC type distinction |
