@@ -1,6 +1,6 @@
 //! OPC UA sessions and native data-change subscriptions. No writes are replayed.
 use crate::{
-    client::{DeviceGatewayClient, SampleSink},
+    client::{DeviceClient, SampleSink},
     model::*,
 };
 use async_trait::async_trait;
@@ -17,7 +17,7 @@ use std::{
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 #[derive(Default)]
-pub struct OpcUaClient {
+pub struct OpcUaDeviceClient {
     sessions: Mutex<HashMap<String, Arc<SessionGuard>>>,
 }
 struct SessionGuard {
@@ -188,7 +188,7 @@ async fn connect(r: &PreparedDeviceRequest, deadline: Instant) -> Result<Session
     }
     Ok(guard)
 }
-impl OpcUaClient {
+impl OpcUaDeviceClient {
     async fn session(
         &self,
         r: &PreparedDeviceRequest,
@@ -209,7 +209,7 @@ impl OpcUaClient {
     }
 }
 #[async_trait]
-impl DeviceGatewayClient for OpcUaClient {
+impl DeviceClient for OpcUaDeviceClient {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,

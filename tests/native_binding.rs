@@ -25,7 +25,49 @@ fn native_registration_interface_and_factory_lifecycle() {
     std::fs::create_dir_all(component.join("service/moqui/device/gateway")).unwrap();
     std::fs::create_dir_all(device.join("service/moqui/device")).unwrap();
     std::fs::write(framework.join("component.xml"), "<component name=\"framework\"/>").unwrap();
-    std::fs::write(framework.join("conf/MoquiDefaultConf.xml"),"<moqui-conf><component-list><component-dir location=\"component\"/></component-list><service-facade><service-file location=\"component://moqui-device/service/moqui/device/DeviceServices.xml\"/><service-file location=\"component://moqui-device-gateway/service/moqui/device/gateway/DeviceGatewayServices.xml\"/></service-facade></moqui-conf>").unwrap();
+    let gateway_files = [
+        (
+            "MqttServices.xml",
+            include_str!("../service/moqui/device/gateway/MqttServices.xml"),
+        ),
+        (
+            "OpcUaServices.xml",
+            include_str!("../service/moqui/device/gateway/OpcUaServices.xml"),
+        ),
+        (
+            "ModbusServices.xml",
+            include_str!("../service/moqui/device/gateway/ModbusServices.xml"),
+        ),
+        (
+            "FileServices.xml",
+            include_str!("../service/moqui/device/gateway/FileServices.xml"),
+        ),
+        (
+            "PlcLogServices.xml",
+            include_str!("../service/moqui/device/gateway/PlcLogServices.xml"),
+        ),
+        (
+            "InboundServices.xml",
+            include_str!("../service/moqui/device/gateway/InboundServices.xml"),
+        ),
+        (
+            "SubscriptionServices.xml",
+            include_str!("../service/moqui/device/gateway/SubscriptionServices.xml"),
+        ),
+    ];
+    let service_files: String = gateway_files
+        .iter()
+        .map(|(name, _)| {
+            format!("<service-file location=\"component://moqui-device-gateway/service/moqui/device/gateway/{name}\"/>")
+        })
+        .collect();
+    std::fs::write(
+        framework.join("conf/MoquiDefaultConf.xml"),
+        format!(
+            "<moqui-conf><component-list><component-dir location=\"component\"/></component-list><service-facade><service-file location=\"component://moqui-device/service/moqui/device/DeviceServices.xml\"/>{service_files}</service-facade></moqui-conf>"
+        ),
+    )
+    .unwrap();
     std::fs::write(device.join("component.xml"), "<component name=\"moqui-device\"/>").unwrap();
     std::fs::write(component.join("component.xml"), include_str!("../component.xml")).unwrap();
     std::fs::write(component.join("MoquiConf.xml"), include_str!("../MoquiConf.xml")).unwrap();
@@ -42,11 +84,9 @@ fn native_registration_interface_and_factory_lifecycle() {
         format!("<services>{}</services>", &device_services[start..end]),
     )
     .unwrap();
-    std::fs::write(
-        component.join("service/moqui/device/gateway/DeviceGatewayServices.xml"),
-        include_str!("../service/moqui/device/gateway/DeviceGatewayServices.xml"),
-    )
-    .unwrap();
+    for (name, content) in gateway_files {
+        std::fs::write(component.join("service/moqui/device/gateway").join(name), content).unwrap();
+    }
     let factory = ExecutionContextFactory::boot_with_options(
         root,
         &framework,

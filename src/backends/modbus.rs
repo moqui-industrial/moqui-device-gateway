@@ -1,5 +1,5 @@
 //! PLC4J-style Modbus TCP addresses, with zero-based offsets.
-use crate::{client::DeviceGatewayClient, model::*};
+use crate::{client::DeviceClient, model::*};
 use async_trait::async_trait;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::{net::TcpStream, sync::Mutex};
@@ -72,7 +72,7 @@ impl Address {
     }
 }
 #[derive(Default)]
-pub struct ModbusClient {
+pub struct ModbusDeviceClient {
     sessions: Mutex<HashMap<String, Arc<Mutex<Option<Context>>>>>,
 }
 fn transport(e: impl std::fmt::Display, writing: bool) -> DeviceGatewayError {
@@ -133,7 +133,7 @@ pub fn encode_words(
     Ok(w)
 }
 #[async_trait]
-impl DeviceGatewayClient for ModbusClient {
+impl DeviceClient for ModbusDeviceClient {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,

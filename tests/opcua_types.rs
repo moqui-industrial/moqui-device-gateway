@@ -1,7 +1,7 @@
 #![cfg(feature = "opcua")]
 mod common;
 use moqui_device_gateway::{
-    backends::opcua::{OpcUaClient, from_variant, node_id, to_variant},
+    backends::opcua::{OpcUaDeviceClient, from_variant, node_id, to_variant},
     *,
 };
 use opcua::types::{NodeId, Variant};
@@ -35,7 +35,7 @@ async fn credentials_require_encryption_before_connecting() {
     r.items[0].address = "ns=2;s=Temperature".into();
     r.connection.credentials.username = Some("operator".into());
     r.connection.credentials.password = Some("secret".into());
-    let e = OpcUaClient::default()
+    let e = OpcUaDeviceClient::default()
         .execute(
             &r,
             &RequestInput::default(),

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+    <service verb="get" noun="SubscriptionState" type="rust"
+             location="moqui_device_gateway::binding::subscription_state" authenticate="false" transaction="ignore">
+        <description>The subscriptions of this process: running, and ended without an unsubscribe.</description>
+        <in-parameters>
+            <parameter name="claimStartup" type="Boolean"><description>true: claim the startup restoration;
+                startupClaimed is true for the first claim in this process only.</description></parameter>
+        </in-parameters>
+        <out-parameters>
+            <parameter name="activeRequestNames" type="List"/>
+            <parameter name="droppedRequestNames" type="List"/>
+            <parameter name="startupClaimed" type="Boolean"/>
+        </out-parameters>
+    </service>
+
+    <service verb="start" noun="Subscriptions" authenticate="false" transaction="ignore">
+        <description>
+            Starts the subscriptions of the device gateway. The first call in a process starts every active (fromDate,
+            thruDate) DeviceRequest of type DrtSubscribe, DrtEvent, DrtStateChange or DrtCyclic whose runServiceName is a
+            service of this component; a later call restarts only the subscriptions that ended without an unsubscribe
+            (a lost connection). An unsubscribed request stays stopped until it is run again.
+
+            The service job start_DeviceGatewaySubscriptions calls it every minute: mr-moqui has no startup hook, so the
+            first run after a start restores the subscriptions. Set the property device_gateway_restore_subscriptions
+            to false on an instance that must not own the subscriptions (only one instance should).
+        </description>
+        <out-parameters>
+            <parameter name="startedRequestNames" type="List"/>
+            <parameter name="failedRequestNames" type="List"/>
+        </out-parameters>
+        <actions><script><![CDATA[
+            startedRequestNames = [];
+            failedRequestNames = [];
+            if (System.getProperty("device_gateway_restore_subscriptions") === "false") return;
+            const state = ec.service.sync().name("moqui.device.gateway.SubscriptionServices.get#SubscriptionState")
+                .parameters({claimStartup: true}).call();
+            if (ec.message.hasError()) return;
+            let names = state.droppedRequestNames || [];
+            if (state.startupClaimed) {
+                const active = new Set(state.activeRequestNames || []);
+                const types = ['DrtSubscribe', 'DrtEvent', 'DrtStateChange', 'DrtCyclic'];
+                names = (ec.entity.find("moqui.device.DeviceRequest").conditionDate("fromDate", "thruDate").list() || [])
+                    .filter(r => types.includes(r.requestTypeEnumId) && (r.runServiceName || '').startsWith('moqui.device.gateway.'))
+                    .map(r => r.requestName)
+                    .filter(n => !active.has(n));
+            }
+            for (const requestName of names) {
+                try {
+                    ec.service.sync().name("moqui.device.DeviceServices.run#DeviceRequest")
+                        .parameters({requestName: requestName}).call();
+                    if (ec.message.hasError()) throw new Error(ec.message.getErrorsString());
+                    startedRequestNames.push(requestName);
+                } catch (e) {
+                    failedRequestNames.push(requestName);
+                    ec.logger.warn(`Device gateway subscription ${requestName} did not start: ${e.message || e}`);
+                    ec.message.clearErrors();
+                }
+            }
+            if (startedRequestNames.length || failedRequestNames.length) {
+                ec.logger.info(`Device gateway subscriptions started: ${startedRequestNames.length}, failed: ${failedRequestNames.length}`);
+            }
+        ]]></script></actions>
+    </service>
+</services>

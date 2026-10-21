@@ -14,27 +14,28 @@ Source references used for the initial implementation:
 
 | Original route/responsibility | Current implementation | Migration state |
 | --- | --- | --- |
-| dispatch-device-request | DeviceGatewayFacade + Moqui service binding | native request selection; no route interpreter |
+| dispatch-device-request | one run#DeviceRequest per protocol (Mqtt, OpcUa, Modbus, File, PlcLog Services) over DeviceGatewayFacade | DeviceRequest.runServiceName selects the service; no route interpreter |
 | mqtt-read-device-request-consumer, mqtt-read-device-request | MQTT backend and JSON normalization | supported JSON scalar/object/list reads; not arbitrary Camel transforms |
 | opcua-read-device-request-consumer, opcua-read-device-request | OPC UA backend | typed reads, monitored items and polling |
-| store-device-request-inbound | binding persistence | Entity Engine; scoped existing identities |
-| store-parameter-batch | bounded persistence worker | current values, conversion, duplicate/tolerance policy |
+| store-device-request-inbound | InboundServices.store#Samples | Entity Engine; scoped existing identities |
+| store-parameter-batch | bounded persistence worker calling store#Samples | current values, conversion, duplicate/tolerance policy of the DeviceRequestItem |
 | store-log-batch | same worker | ParameterLog, original PLC type distinction |
-| plc-log-consumer, plc-log-ingest | MQTT subscription + PLC batch decoder | itemless logging requests; no static startup auto-subscription |
-| plc-log-ingest-with-source | ParameterLog persistence | exact Parameter ID; no inferred identity |
-| plc-log-ingest-without-source | DeviceLog persistence | full event JSON |
-| transfer-file, transfer-device-content | file/SFTP backends and resource preparation | native bytes, no base64 REST hop |
-| after-store-callback | existing Moqui entity ECAs remain applicable | legacy HTTP callback parity is pending |
-| run-device-config-export | existing device services retained | DeviceRuleSet/DeviceConfig rendering and transfer adapter pending |
-| dynamic startup restoration/group recursion | existing scheduler/deployment remains | explicit owner/startup service pending |
-| trajectory service | original general service retained | native renderer/transfer integration pending; original gateway did not expose its advertised trajectory endpoint |
+| plc-log-consumer, plc-log-ingest | PlcLogServices.run#DeviceRequest: MQTT subscription + PLC batch decoder | explicit service per request; restored at startup like the other subscriptions |
+| plc-log-ingest-with-source | InboundServices.store#PlcLog, ParameterLog | exact Parameter ID; no inferred identity |
+| plc-log-ingest-without-source | InboundServices.store#PlcLog, DeviceLog | full event JSON |
+| transfer-file, transfer-device-content | FileServices.run#DeviceRequest with deviceContentId or transferFiles | native bytes, no base64 REST hop |
+| after-store-callback | a SECA on InboundServices.store#Samples or store#PlcLog; moqui-device notify#DeviceRequestResult after writes, exports and transfers | done; no HTTP callback |
+| run-device-config-export | moqui-device DeviceConfigServices.get#DeviceConfigExportFiles (the export SQL on the Entity Engine) and export#DeviceConfig, sent with FileServices | done |
+| dynamic startup restoration/group recursion | SubscriptionServices.start#Subscriptions from the service job start_DeviceGatewaySubscriptions; property device_gateway_restore_subscriptions | done: restores after a start, restarts lost subscriptions, never undoes an unsubscribe |
+| trajectory service | moqui-device TrajectoryPlannerServices.get#TrajectoryAxes and export#Trajectory, sent as one MQTT payload message | done; the original gateway never exposed its advertised trajectory endpoint |
 
-Do not delete DeviceGatewayServices.xml or remove the old gateway merely by
-installing this component. Its generic HTTP helper is used by other services,
-and exports/callbacks/restoration still need explicit migration and tests.
-Recipe selectors, StatusFlow/StatusItem handling, compound types, target-specific
-formats and per-device export conventions belong to moqui-device's general
-services, not to a protocol backend. Keep these selectors on the Entity Engine.
+moqui-device on mr-moqui no longer has DeviceGatewayServices.xml or the
+DrrMoquiDeviceGateway router: its requests name these protocol services
+directly. Its HTTP helper for inference providers is
+TrajectoryPlannerServices.call#InferenceEndpoint. Recipe selectors,
+StatusFlow/StatusItem handling, compound types, target-specific formats and
+per-device export conventions belong to moqui-device's general services, not to
+a protocol backend. Keep these selectors on the Entity Engine.
 
 ## Differences requiring review
 
@@ -71,12 +72,13 @@ services, not to a protocol backend. Keep these selectors on the Entity Engine.
    existing Device/Parameter seed data; add failure-injection persistence tests.
 2. Add grouped Modbus bulk write PDUs. Bulk read items already share one
    response per configured address within a request.
-3. Port DeviceConfig/DeviceRuleSet and trajectory renderers into general
-   moqui-device services, supplying immutable files/values to this API.
-4. Replace legacy HTTP callback/bootstrap paths with explicit Moqui services and
-   framework schedules; verify owner assignment and restart semantics.
-5. Add MQTT private CA/mTLS and tested reconnect policies for subscriptions;
-   never automatically replay a command write.
+3. Verify the recipe export files against the Quarkus gateway output for real
+   rule sets, and the trajectory message against MqttParameterSub.
+4. Verify owner assignment across instances (one owner per field device) with
+   device_gateway_restore_subscriptions.
+5. Add MQTT private CA/mTLS and a reconnect backoff for subscriptions (today
+   start#Subscriptions restarts a lost one within a minute); never automatically
+   replay a command write.
 6. Validate pinned-host SFTP and secured OPC UA against real servers/devices.
 7. Select proven PROFINET Supervisor and EtherNet/IP explicit-message stacks.
    Keep cyclic I/O controller ownership and safety PLC control outside this

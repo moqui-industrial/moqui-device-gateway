@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+    <service verb="run" noun="DeviceRequest" type="rust"
+             location="moqui_device_gateway::binding::run_file_request" authenticate="false" transaction="ignore">
+        <description>
+            File and SFTP transfers (brokerUri file:directory or sftp://host:port/directory with a pinned
+            host-key-fingerprint). DrtContentTransfer writes the DeviceContent of deviceContentId and the transferFiles;
+            DrtConfigWrite writes the transferFiles of a recipe export (moqui.device.DeviceConfigServices).
+            Set as DeviceRequest.runServiceName; called by moqui.device.DeviceServices.run#DeviceRequest. A request whose
+            endpoint is another protocol is an error.
+        </description>
+        <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
+    </service>
+</services>

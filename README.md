@@ -11,15 +11,46 @@ Quarkus/Camel moqui-device-gateway.
 | `old-mr-moqui` | The first standalone Rust rewrite, kept for reference until this work is complete |
 | `mr-moqui` | This Moqui component |
 
-The rest of the Quarkus/Camel gateway moves here step by step: its SQL becomes
-entity engine queries and its REST calls become local service calls.
+What the Quarkus gateway did over REST is now a local service call, and its SQL
+is Entity Engine queries. Recipe rendering and trajectory messages are general
+device services of moqui-device: this component only moves the data.
 
-The public application entry point remains
-`moqui.device.DeviceServices.run#DeviceRequest`. Set the request's
-`runServiceName` to `moqui.device.gateway.DeviceGatewayServices.run#DeviceRequest`.
+## Services
+
+The application entry point is `moqui.device.DeviceServices.run#DeviceRequest`
+(moqui-device). It calls the service in `DeviceRequest.runServiceName`, which is
+one of the protocol services of this component, each an implementation of
+`moqui.device.DeviceServices.run#DeviceRequestInternal`:
+
+| `runServiceName` | Endpoints | Request types |
+|---|---|---|
+| `moqui.device.gateway.MqttServices.run#DeviceRequest` | `mqtt://`, `mqtts://`, legacy `paho-mqtt5:` | read, write (items, or one `payload` message), subscribe, cyclic, unsubscribe |
+| `moqui.device.gateway.OpcUaServices.run#DeviceRequest` | `opc.tcp://`, `DcdOpcUa` | read, write, subscribe (monitored items), cyclic, unsubscribe |
+| `moqui.device.gateway.ModbusServices.run#DeviceRequest` | `modbus-tcp://`, `DcdModbusTCP` | read, write, cyclic, unsubscribe |
+| `moqui.device.gateway.FileServices.run#DeviceRequest` | `file:`, `sftp://` | content transfer, recipe export (`DrtConfigWrite`) |
+| `moqui.device.gateway.PlcLogServices.run#DeviceRequest` | MQTT | subscription to the moqui-plc LoggerFacade events, unsubscribe |
+
+A service runs only its own protocol: a request whose endpoint is another
+protocol is an error, never a silent switch.
+
+The other services of the component:
+
+| Service | Use |
+|---|---|
+| `moqui.device.gateway.InboundServices.store#Samples` | Stores the values a device sent: the result of a read and the samples of a subscription or polling. A SECA on it is the after-store callback of the former gateway |
+| `moqui.device.gateway.InboundServices.store#PlcLog` | Stores PLC log events: ParameterLog for an event with a source, DeviceLog for the others |
+| `moqui.device.gateway.SubscriptionServices.start#Subscriptions` | Restores the subscriptions after a start and restarts those that lost their connection |
+| `moqui.device.gateway.SubscriptionServices.get#SubscriptionState` | The subscriptions of this process: running, and ended without an unsubscribe |
+
+In Rust, `DeviceGatewayToolFactory` (tool `DeviceGateway`) is the registry of
+connections and subscriptions: it owns the I/O runtime, the protocol clients
+with their sessions, the active subscriptions and the persistence queue. Each
+protocol is a `DeviceClient`: `MqttDeviceClient`, `OpcUaDeviceClient`,
+`ModbusDeviceClient`, and `FileDeviceClient` for file and SFTP.
+
 Device, DeviceConnection, DeviceRequest, DeviceRequestItem, Parameter and
-ParameterDef remain the existing Moqui entities. No additional database,
-REST process, route interpreter or scheduler is introduced.
+ParameterDef remain the existing Moqui entities. No additional database, REST
+process or route interpreter is introduced.
 
 ## Installation
 
@@ -28,15 +59,9 @@ with `moqui-device` and `moqui-math` on their `mr-moqui` branches. The component
 uses the framework's sibling `moqui-core` and `moqui-lib` crates. It is not a
 standalone checkout with respect to Cargo path dependency resolution.
 
-Apply `patches/moqui-device-mr-moqui.patch` to moqui-device unless those changes
-are already present. The patch exposes structured outcomes through the general
-entry point, forwards content-transfer inputs and allows itemless unsubscribe.
-It preserves the existing dispatch to GenICam and other implementations.
-
-Build using the framework's `./moq build`, which links native components.
-The component registers `moqui_device_gateway::DeviceGatewayToolFactory` as tool `DeviceGateway`
-and its native service through the framework's native registry. Rust 1.99 or
-later is required by this initial lockfile/toolchain baseline.
+Build using the framework's `./moq build`, which links native components, and
+load the seed data (the `start_DeviceGatewaySubscriptions` service job). Rust
+1.99 or later is required by this initial lockfile/toolchain baseline.
 
 ```sh
 cd runtime/component/moqui-device-gateway
@@ -55,28 +80,27 @@ these checks prove and which deployment checks remain necessary.
 | Backend | Read/write | Continuous acquisition | Files |
 | --- | --- | --- | --- |
 | Modbus TCP | coils and typed integer/float registers | explicit `DrtCyclic` polling | no |
-| MQTT 5 | JSON values; gateway-compatible item publication envelope; QoS 1 PUBACK | broker subscriptions with SUBACK | no |
+| MQTT 5 | JSON values; gateway-compatible item publication envelope; one JSON message for a write without items; QoS 1 PUBACK | broker subscriptions with SUBACK | no |
 | OPC UA | typed values, per-node status and source timestamps | monitored-item subscriptions or explicit polling | no |
 | Local directory | no | no | binary transfer, temporary file followed by rename |
 | SFTP | no | no | binary transfer, pinned SSH host key, password or private key |
 
-PROFINET, EtherNet/IP, Modbus TLS, browse/discovery, structured OPC UA values,
-recipe/trajectory export and legacy gateway startup restoration are not yet
-implemented. They return unsupported errors where applicable; there is no
-fallback protocol. The existing gateway must remain available for workloads
-not covered by this release. The complete migration checklist is in
+PROFINET, EtherNet/IP, Modbus TLS, browse/discovery and structured OPC UA
+values are not yet implemented. They return unsupported errors where applicable;
+there is no fallback protocol. The complete migration checklist is in
 [compatibility](docs/compatibility.md).
 
 ## One API, two callers
 
 `DeviceGatewayFacade::execute` takes a prepared, owned request, input values, an
 absolute monotonic deadline, output storage and an optional sample sink. The
-`DeviceGatewayClient` trait is the backend contract. Neither requires an
+`DeviceClient` trait is the backend contract. Neither requires an
 ExecutionContext. See [direct Rust access](examples/direct_modbus.rs).
 
-The Moqui native service resolves cached configuration using the Entity Engine,
-prepares this same request, and persists finite reads before returning. A bounded
-worker queue persists subscription/polling samples. Factory shutdown cancels
+The Moqui protocol services resolve cached configuration using the Entity
+Engine, prepare this same request, and store finite reads through
+`store#Samples` before returning. A bounded worker queue sends subscription and
+polling samples to `store#Samples` or `store#PlcLog`. Factory shutdown cancels
 subscriptions, closes sessions and drains queued persistence work.
 
 This implementation allocates, uses asynchronous networking, locks and queues.
@@ -118,23 +142,48 @@ covers session acquisition and all items. A timed-out write has an `uncertain`
 outcome and is never automatically resubmitted. MQTT PUBACK confirms broker
 acceptance, not application of a setpoint by the target device.
 
+## Inputs and results
+
+Besides the request and its items, `run#DeviceRequest` passes:
+
+* `deviceContentId`: for `DrtContentTransfer`, the DeviceContent to send. It must
+  belong to the device of the request.
+* `transferFiles`: files to send, maps with `name` and `bytes` (binary) or
+  `content` (text). moqui-device's recipe export
+  (`moqui.device.DeviceConfigServices.export#DeviceConfig`) sends its files this
+  way; a `DrtConfigWrite` to a file or SFTP endpoint is a transfer.
+* `payload`: a map sent as one JSON message by an MQTT write without items, on
+  the topic in `DeviceRequest.query`. moqui-device's
+  `moqui.device.TrajectoryPlannerServices.export#Trajectory` publishes trajectories
+  this way.
+
 Finite calls return `status`, `itemResults`, `subscriptionId`,
 `transferredFiles` and `errorMessage`. Status is `completed`, `partial`, `failed`,
-`uncertain`, `active` or `unchanged`. The patched general service also records
-failed/partial/uncertain outcomes in the Moqui message facade. The Rust API
-retains completed item results if a later operation fails.
+`uncertain`, `active` or `unchanged`. `run#DeviceRequest` also records
+failed/partial/uncertain outcomes in the Moqui message facade and notifies the
+user of writes, exports and transfers. The Rust API retains completed item
+results if a later operation fails.
+
+## Subscriptions
 
 Use `DrtUnsubscribe` with `parentRequestName` to stop the owning request. An active
-request cannot be replaced without explicitly stopping it. A disconnected MQTT
-subscription ends and logs the failure; restarting is an explicit operation in
-this release. Subscription ownership is local to the mr-moqui process. Run one
-assigned owner for a field device; sharing a database does not coordinate
-sessions across hosts.
+request cannot be replaced without explicitly stopping it. Subscription ownership
+is local to the mr-moqui process: run one assigned owner for a field device;
+sharing a database does not coordinate sessions across hosts.
+
+mr-moqui has no startup hook, so the service job `start_DeviceGatewaySubscriptions`
+calls `start#Subscriptions` every minute. Its first run in a process starts every
+active `DrtSubscribe`, `DrtEvent`, `DrtStateChange` and `DrtCyclic` request whose
+`runServiceName` is a service of this component; later runs restart only the
+subscriptions that ended without an unsubscribe, such as an MQTT subscription
+whose connection was lost. An unsubscribed request stays stopped. Set the
+property `device_gateway_restore_subscriptions=false` on an instance that must
+not own the subscriptions. No write is ever replayed.
 
 `DrpLogging` writes logs; a missing purpose updates current Parameter values.
-PLC LoggerFacade batches preserve `loggerName` as Device.deviceId and `source`
-as the exact Parameter.parameterId. Empty source writes the complete event to
-DeviceLog. An itemless logging MQTT subscription selects this batch format;
-`requestGroup=plc-log` selects it explicitly. CODESYS `DT#` timestamps are
-interpreted as UTC; RFC3339 timestamps retain their offset. Existing Parameter
-and Device identities are required, and no unknown parameters are created.
+`PlcLogServices.run#DeviceRequest` subscribes to PLC LoggerFacade batches: it
+keeps `loggerName` as Device.deviceId and `source` as the exact
+Parameter.parameterId; an empty source writes the complete event to DeviceLog.
+CODESYS `DT#` timestamps are interpreted as UTC; RFC3339 timestamps retain their
+offset. Existing Parameter and Device identities are required, and no unknown
+parameters are created.

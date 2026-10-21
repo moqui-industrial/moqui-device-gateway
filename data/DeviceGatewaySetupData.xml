@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<entity-facade-xml type="seed">
+    <!-- Restores the subscriptions after a start and restarts those that lost their connection; see
+         moqui.device.gateway.SubscriptionServices.start#Subscriptions. localOnly: each instance runs its own. -->
+    <moqui.service.job.ServiceJob jobName="start_DeviceGatewaySubscriptions"
+            description="Start the device gateway subscriptions (after a start, and those that lost their connection)"
+            serviceName="moqui.device.gateway.SubscriptionServices.start#Subscriptions"
+            cronExpression="0 * * * * ?" localOnly="Y" paused="N"/>
+</entity-facade-xml>

@@ -19,14 +19,6 @@ jobs:
           repository: moqui/moqui-device
           ref: mr-moqui
           path: mr-moqui/runtime/component/moqui-device
-      - name: Apply general service interface migration
-        working-directory: mr-moqui/runtime/component/moqui-device
-        run: |
-          if git apply --check ../moqui-device-gateway/patches/moqui-device-mr-moqui.patch; then
-            git apply ../moqui-device-gateway/patches/moqui-device-mr-moqui.patch
-          else
-            git apply --reverse --check ../moqui-device-gateway/patches/moqui-device-mr-moqui.patch
-          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

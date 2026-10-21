@@ -10,7 +10,7 @@ use std::{
 };
 struct Reader(AtomicUsize);
 #[async_trait]
-impl DeviceGatewayClient for Reader {
+impl DeviceClient for Reader {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
@@ -142,7 +142,7 @@ async fn event_subscription_does_not_silently_become_polling() {
 }
 struct PartialReader;
 #[async_trait]
-impl DeviceGatewayClient for PartialReader {
+impl DeviceClient for PartialReader {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,

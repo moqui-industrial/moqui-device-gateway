@@ -217,6 +217,8 @@ impl PreparedDeviceRequest {
 pub struct RequestInput {
     pub values: BTreeMap<String, FieldValue>,
     pub files: Vec<TransferFile>,
+    /// A message sent as it is by a write without items (an MQTT publication on the request topic).
+    pub payload: Option<Vec<u8>>,
 }
 #[derive(Clone, Debug)]
 pub struct TransferFile {

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+    <service verb="run" noun="DeviceRequest" type="rust"
+             location="moqui_device_gateway::binding::run_mqtt_request" authenticate="false" transaction="ignore">
+        <description>
+            MQTT 5 (brokerUri mqtt:// or mqtts://, or the legacy paho-mqtt5:?brokerUrl=...). DrtRead waits for one message
+            per item topic; DrtWrite publishes each item to its topic (DeviceRequestItem.query, else DeviceRequest.query)
+            with QoS 1 and succeeds on the PUBACK, or, without items, publishes the payload parameter as JSON on
+            DeviceRequest.query; DrtSubscribe, DrtEvent and DrtCyclic subscribe and store what arrives through
+            InboundServices.store#Samples; DrtUnsubscribe stops the subscription of parentRequestName.
+            Set as DeviceRequest.runServiceName; called by moqui.device.DeviceServices.run#DeviceRequest. A request whose
+            endpoint is another protocol is an error.
+        </description>
+        <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
+    </service>
+</services>

@@ -16,7 +16,7 @@ pub trait SampleSink: Send + Sync {
     fn emit(&self, batch: SampleBatch) -> Result<(), DeviceGatewayError>;
 }
 #[async_trait]
-pub trait DeviceGatewayClient: Send + Sync {
+pub trait DeviceClient: Send + Sync {
     fn capabilities(&self) -> Capabilities;
     async fn execute(
         &self,
@@ -44,7 +44,7 @@ struct Subscription {
     request: Arc<PreparedDeviceRequest>,
 }
 pub struct DeviceGatewayFacade {
-    clients: HashMap<ProtocolKey, Arc<dyn DeviceGatewayClient>>,
+    clients: HashMap<ProtocolKey, Arc<dyn DeviceClient>>,
     subscriptions: Mutex<HashMap<String, Subscription>>,
     lifecycle: Mutex<()>,
     closed: AtomicBool,
@@ -72,21 +72,21 @@ impl DeviceGatewayFacade {
         #[cfg(feature = "modbus")]
         facade.install(
             Protocol::ModbusTcp,
-            Arc::new(crate::backends::modbus::ModbusClient::default()),
+            Arc::new(crate::backends::modbus::ModbusDeviceClient::default()),
         );
         #[cfg(feature = "mqtt")]
-        facade.install(Protocol::Mqtt, Arc::new(crate::backends::mqtt::MqttClient));
+        facade.install(Protocol::Mqtt, Arc::new(crate::backends::mqtt::MqttDeviceClient));
         #[cfg(feature = "opcua")]
         facade.install(
             Protocol::OpcUa,
-            Arc::new(crate::backends::opcua::OpcUaClient::default()),
+            Arc::new(crate::backends::opcua::OpcUaDeviceClient::default()),
         );
-        let files = Arc::new(crate::backends::file::FileClient);
+        let files = Arc::new(crate::backends::file::FileDeviceClient);
         facade.install(Protocol::File, files.clone());
         facade.install(Protocol::Sftp, files);
         facade
     }
-    pub fn install(&mut self, protocol: Protocol, client: Arc<dyn DeviceGatewayClient>) {
+    pub fn install(&mut self, protocol: Protocol, client: Arc<dyn DeviceClient>) {
         self.clients.insert(protocol.into(), client);
     }
     pub async fn execute(
@@ -237,7 +237,7 @@ impl DeviceGatewayFacade {
         input: &RequestInput,
         output: &mut RequestOutput,
         deadline: Instant,
-        client: Arc<dyn DeviceGatewayClient>,
+        client: Arc<dyn DeviceClient>,
     ) -> Result<(), DeviceGatewayError> {
         let mut physical = input.clone();
         if request.operation == Operation::Write {
@@ -277,6 +277,21 @@ impl DeviceGatewayFacade {
         }
 
         Ok(())
+    }
+    /// The requests with a subscription or polling task: those whose task runs, and those whose task ended without an
+    /// unsubscribe (a lost connection). An unsubscribed request is in neither list.
+    pub async fn subscription_names(&self) -> (Vec<String>, Vec<String>) {
+        let (mut active, mut dropped) = (Vec::new(), Vec::new());
+        for (name, s) in self.subscriptions.lock().await.iter() {
+            if s.task.is_finished() {
+                dropped.push(name.clone());
+            } else {
+                active.push(name.clone());
+            }
+        }
+        active.sort();
+        dropped.sort();
+        (active, dropped)
     }
     pub async fn close(&self) {
         let _guard = self.lifecycle.lock().await;

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+    <service verb="run" noun="DeviceRequest" type="rust"
+             location="moqui_device_gateway::binding::run_modbus_request" authenticate="false" transaction="ignore">
+        <description>
+            Modbus TCP (modbus-tcp:// endpoint or driverEnumId DcdModbusTCP). DrtRead, DrtWrite and DrtCyclic polling on the
+            register addresses in DeviceRequestItem.query; the bulk items share one read per address.
+            Set as DeviceRequest.runServiceName; called by moqui.device.DeviceServices.run#DeviceRequest. A request whose
+            endpoint is another protocol is an error.
+        </description>
+        <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
+    </service>
+</services>

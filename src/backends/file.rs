@@ -1,5 +1,5 @@
 //! Finite file transfers. Destinations are directories, never arbitrary item paths.
-use crate::{client::DeviceGatewayClient, model::*};
+use crate::{client::DeviceClient, model::*};
 use async_trait::async_trait;
 use std::{
     path::{Path, PathBuf},
@@ -8,7 +8,7 @@ use std::{
 };
 use tokio::io::AsyncWriteExt;
 #[derive(Default)]
-pub struct FileClient;
+pub struct FileDeviceClient;
 static NEXT: AtomicU64 = AtomicU64::new(1);
 pub fn validate_name(name: &str) -> Result<(), DeviceGatewayError> {
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
@@ -25,7 +25,7 @@ impl Drop for TempPath {
     }
 }
 #[async_trait]
-impl DeviceGatewayClient for FileClient {
+impl DeviceClient for FileDeviceClient {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: false,

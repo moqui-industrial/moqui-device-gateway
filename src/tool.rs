@@ -1,4 +1,5 @@
-//! Factory lifecycle owns the I/O runtime and a bounded persistence queue.
+//! The registry of connections and subscriptions: the factory owns the I/O runtime, the protocol clients with their
+//! sessions and the active subscriptions (through DeviceGatewayFacade), and a bounded persistence queue.
 use crate::{
     client::{DeviceGatewayFacade, SampleSink},
     model::*,
@@ -27,6 +28,8 @@ pub(crate) struct State {
     pub sink: Arc<QueueSink>,
     stop: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    /// Set by the first start#Subscriptions of this process, so the subscriptions are restored once per start.
+    pub startup_claimed: AtomicBool,
 }
 pub(crate) struct QueueSink {
     sender: mpsc::SyncSender<SampleBatch>,
@@ -93,6 +96,7 @@ impl ToolFactory for DeviceGatewayToolFactory {
             sink: Arc::new(QueueSink { sender }),
             stop,
             worker: Mutex::new(Some(worker)),
+            startup_claimed: AtomicBool::new(false),
         }));
         Ok(())
     }
@@ -125,7 +129,7 @@ fn persist_loop(factory: Weak<ExecutionContextFactory>, receiver: mpsc::Receiver
                 let ec = factory.new_context();
                 let _entered = ec.enter();
                 let _auth = ec.disable_authz();
-                if let Err(error) = crate::binding::persist_batch(&ec, &batch) {
+                if let Err(error) = crate::binding::store_batch(&ec, &batch) {
                     tracing::error!(request=%batch.request_name,error=%error,"Device gateway samples were not saved");
                 }
             }

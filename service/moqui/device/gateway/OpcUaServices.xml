@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<services xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="http://moqui.org/xsd/service-definition-3.xsd">
+    <service verb="run" noun="DeviceRequest" type="rust"
+             location="moqui_device_gateway::binding::run_opcua_request" authenticate="false" transaction="ignore">
+        <description>
+            OPC UA (brokerUri or DeviceConnection.transportConfig opc.tcp://, or driverEnumId DcdOpcUa). DrtRead and DrtWrite
+            on the node ids in DeviceRequestItem.query; DrtSubscribe and DrtEvent create monitored items; DrtCyclic polls
+            at pollingInterval; values are stored through InboundServices.store#Samples.
+            Set as DeviceRequest.runServiceName; called by moqui.device.DeviceServices.run#DeviceRequest. A request whose
+            endpoint is another protocol is an error.
+        </description>
+        <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>
+    </service>
+</services>

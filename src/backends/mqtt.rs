@@ -1,6 +1,6 @@
 //! MQTT 5: success means PUBACK/SUBACK, not merely enqueueing a command.
 use crate::{
-    client::{DeviceGatewayClient, SampleSink},
+    client::{DeviceClient, SampleSink},
     model::*,
     payload,
 };
@@ -25,7 +25,7 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 #[derive(Default)]
-pub struct MqttClient;
+pub struct MqttDeviceClient;
 static NEXT_CLIENT: AtomicU64 = AtomicU64::new(1);
 fn session(request: &PreparedDeviceRequest) -> Result<(AsyncClient, EventLoop), DeviceGatewayError> {
     let c = &request.connection;
@@ -197,7 +197,7 @@ fn emit(r: &PreparedDeviceRequest, topic: &str, bytes: &[u8], sink: &dyn SampleS
     })
 }
 #[async_trait]
-impl DeviceGatewayClient for MqttClient {
+impl DeviceClient for MqttDeviceClient {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             read: true,
@@ -226,6 +226,27 @@ impl DeviceGatewayClient for MqttClient {
                 "false" => false,
                 _ => return Err(DeviceGatewayError::invalid("MQTT retain must be true or false")),
             };
+            if let Some(message) = &input.payload {
+                // One message on the request topic, as the trajectory export sends it.
+                let topic = topic(r, None)?;
+                if topic.contains(['#', '+']) {
+                    return Err(DeviceGatewayError::invalid(
+                        "MQTT publication topic cannot contain wildcards",
+                    ));
+                }
+                client
+                    .publish(topic, QoS::AtLeastOnce, retain, message.clone())
+                    .await
+                    .map_err(|_| DeviceGatewayError::transport("Cannot queue MQTT publication"))?;
+                loop {
+                    if let Event::Incoming(Packet::PubAck(ack)) = poll(&mut events, deadline, true).await? {
+                        if !matches!(ack.reason, PubAckReason::Success | PubAckReason::NoMatchingSubscribers) {
+                            return Err(DeviceGatewayError::transport("MQTT broker rejected publication"));
+                        }
+                        return Ok(());
+                    }
+                }
+            }
             // Preflight every payload before sending the first command.
             let plans = r
                 .items

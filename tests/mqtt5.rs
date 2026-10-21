@@ -143,3 +143,42 @@ async fn read_handles_retained_message_before_suback() {
     server.await.unwrap();
     f.close().await;
 }
+#[tokio::test]
+async fn payload_without_items_is_one_publication_on_the_request_topic() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ep = format!("mqtt://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        let (mut s, _) = listener.accept().await.unwrap();
+        let (header, _) = packet(&mut s).await;
+        assert_eq!(header, 0x10);
+        send(&mut s, 0x20, &[0, 0, 0]).await;
+        let (header, body) = packet(&mut s).await;
+        assert_eq!(header & 0xf6, 0x32);
+        let len = u16::from_be_bytes([body[0], body[1]]) as usize;
+        assert_eq!(&body[2..2 + len], b"moqui/robot/arm1/trajectory");
+        let id = [body[2 + len], body[3 + len]];
+        assert_eq!(body[4 + len], 0);
+        let message: serde_json::Value = serde_json::from_slice(&body[5 + len..]).unwrap();
+        assert_eq!(message["axes"]["X"][1], 860);
+        send(&mut s, 0x40, &id).await;
+        let _ = tokio::time::timeout(Duration::from_millis(500), s.read_u8()).await;
+    });
+    let mut r = common::request(Protocol::Mqtt, ep, Operation::Write);
+    r.items.clear();
+    r.query = Some("moqui/robot/arm1/trajectory".into());
+    let r = Arc::new(r);
+    let f = Arc::new(DeviceGatewayFacade::new());
+    let input = RequestInput {
+        payload: Some(br#"{"waypointCount":2,"axes":{"X":[850,860]}}"#.to_vec()),
+        ..Default::default()
+    };
+    let mut out = RequestOutput::default();
+    assert_eq!(
+        f.execute(r.clone(), &input, &mut out, r.deadline(), None)
+            .await
+            .unwrap(),
+        ExecutionOutcome::Completed
+    );
+    server.await.unwrap();
+    f.close().await;
+}
