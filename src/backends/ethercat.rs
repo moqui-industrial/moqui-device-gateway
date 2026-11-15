@@ -32,27 +32,37 @@
 
 use crate::{device_facade::DeviceFacade, model::*};
 use async_trait::async_trait;
+#[cfg(unix)]
 use ethercrab::{
     std::{ethercat_now, tx_rx_task},
     MainDevice, MainDeviceConfig, PduStorage, Timeouts,
 };
+#[cfg(unix)]
 use std::{
     collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+use std::time::Instant;
+#[cfg(unix)]
 use tokio::sync::{watch, Mutex};
 
+#[cfg(unix)]
 const MAX_SUBDEVICES: usize = 64;
+#[cfg(unix)]
 const MAX_PDI: usize = 4096;
+#[cfg(unix)]
 const MAX_FRAMES: usize = 16;
+#[cfg(unix)]
 const MAX_PDU_DATA: usize = PduStorage::element_size(1100);
+#[cfg(unix)]
 /// How long a segment that stopped stays stopped before a request starts it again: a request polled at a short
 /// interval must not open the interface many times a second.
 const RESTART_DELAY: Duration = Duration::from_secs(5);
+#[cfg(unix)]
 const DEFAULT_CYCLE_US: u64 = 2000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -210,6 +220,7 @@ pub fn encode(image: &mut [u8], a: &Address, value: &FieldValue) -> Result<(), D
     Ok(())
 }
 
+#[cfg(unix)]
 /// The process data of the SubDevices, as of the last cycle.
 #[derive(Default)]
 struct Image {
@@ -223,13 +234,16 @@ struct Image {
     outputs: Vec<Vec<u8>>,
 }
 
+#[cfg(unix)]
 /// The PDU storage of a segment, owned by its threads and freed once they no longer use it.
 struct Storage(*mut PduStorage<MAX_FRAMES, MAX_PDU_DATA>);
 
+#[cfg(unix)]
 // SAFETY: the storage is shared with ethercrab's TX/RX and loop handles, which are themselves sent between threads;
 // `Storage` only carries the pointer to free it.
 unsafe impl Send for Storage {}
 
+#[cfg(unix)]
 impl Storage {
     /// # Safety
     ///
@@ -239,6 +253,7 @@ impl Storage {
     }
 }
 
+#[cfg(unix)]
 struct Segment {
     /// The cycle of the process data exchange, fixed when the segment starts.
     cycle: Duration,
@@ -248,6 +263,7 @@ struct Segment {
     stop: AtomicBool,
 }
 
+#[cfg(unix)]
 impl Segment {
     fn new(cycle: Duration) -> Arc<Self> {
         Arc::new(Self {
@@ -443,9 +459,40 @@ impl Segment {
     }
 }
 
+#[cfg(unix)]
 #[derive(Default)]
 pub struct EtherCatDeviceClient {
     segments: Mutex<HashMap<String, Arc<Segment>>>,
+}
+
+#[cfg(not(unix))]
+#[derive(Default)]
+pub struct EtherCatDeviceClient;
+
+#[cfg(not(unix))]
+#[async_trait]
+impl DeviceFacade for EtherCatDeviceClient {
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            read: false,
+            write: false,
+            subscribe: false,
+        }
+    }
+
+    async fn execute(
+        &self,
+        _r: &PreparedDeviceRequest,
+        _input: &RequestInput,
+        _out: &mut RequestOutput,
+        _deadline: Instant,
+    ) -> Result<(), DeviceGatewayError> {
+        Err(DeviceGatewayError::unsupported(
+            "EtherCAT raw socket backend is only supported on Linux/Unix",
+        ))
+    }
+
+    async fn close(&self) {}
 }
 
 /// The interface of an endpoint `ethercat://eth0`.
@@ -462,6 +509,7 @@ pub fn interface(endpoint: &str) -> Result<String, DeviceGatewayError> {
     Ok(name.to_string())
 }
 
+#[cfg(unix)]
 #[async_trait]
 impl DeviceFacade for EtherCatDeviceClient {
     fn capabilities(&self) -> Capabilities {

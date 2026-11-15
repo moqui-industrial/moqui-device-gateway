@@ -135,7 +135,51 @@ fn parse_options(raw: &str) -> Result<BTreeMap<String, String>, Error> {
     Ok(result)
 }
 
-fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Result<Connection, Error> {
+fn is_enum_in_hierarchy(
+    ec: &ExecutionContext,
+    ef: &EntityFacade,
+    enum_id: Option<&str>,
+    parent_enum_id: &str,
+) -> bool {
+    let Some(id) = enum_id else {
+        return false;
+    };
+    if id == parent_enum_id {
+        return true;
+    }
+    let mut params = Parameters::new();
+    params.insert("parentEnumId".into(), Value::string(parent_enum_id));
+    params.insert("includeParent".into(), Value::Bool(true));
+    params.insert("includeNested".into(), Value::Bool(true));
+    if let Ok(out) = call_service(ec, "org.moqui.impl.BasicServices.find#EnumerationByParent", &params) {
+        if let Some(Value::List(list)) = out.get("enumIdSet") {
+            if list.iter().any(|v| v.as_str() == Some(id)) {
+                return true;
+            }
+        }
+    }
+    // Fallback: traverse moqui.basic.Enumeration hierarchy with cache
+    let mut current = Some(id.to_string());
+    while let Some(curr_id) = current {
+        if curr_id == parent_enum_id {
+            return true;
+        }
+        current = ef
+            .find("moqui.basic.Enumeration")
+            .ok()
+            .and_then(|f| f.eq("enumId", Value::string(curr_id)).use_cache(true).one().ok().flatten())
+            .and_then(|e| text(&e, "parentEnumId"));
+    }
+    false
+}
+
+fn connection(
+    ec: &ExecutionContext,
+    ef: &EntityFacade,
+    r: &EntityValue,
+    c: Option<&EntityValue>,
+    device_id: &str,
+) -> Result<Connection, Error> {
     let mut options = if let Some(c) = c {
         if text(c, "deviceId").as_deref() != Some(device_id) {
             return Err(Error::new("Connection belongs to another device"));
@@ -151,10 +195,7 @@ fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Resu
         BTreeMap::new()
     };
     let router = text(r, "routerEnumId");
-    let is_broker = matches!(
-        router.as_deref(),
-        Some("DrrBroker" | "DrrMQTTBroker" | "DrrAMQPBroker" | "DrrSTOMPBroker" | "DrrKafka")
-    ) || c.is_none();
+    let is_broker = is_enum_in_hierarchy(ec, ef, router.as_deref(), "DrrBroker") || c.is_none();
 
     let endpoint = if let Some(broker_uri) = text(r, "brokerUri").filter(|s| !s.trim().is_empty()) {
         broker_uri
@@ -177,12 +218,13 @@ fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Resu
         }
     };
     let driver = c.and_then(|c| text(c, "driverEnumId"));
+    let is_mqtt_router = is_enum_in_hierarchy(ec, ef, router.as_deref(), "DrrMQTTBroker");
     let protocol = if endpoint.starts_with("paho-mqtt5:")
         || endpoint.starts_with("paho:")
         || endpoint.starts_with("mqtt://")
         || endpoint.starts_with("mqtts://")
         || driver.as_deref() == Some("DcdMqtt")
-        || router.as_deref() == Some("DrrMQTTBroker")
+        || is_mqtt_router
     {
         Protocol::Mqtt
     } else if endpoint.starts_with("milo-client:")
@@ -404,9 +446,9 @@ pub fn prepare(
         let parent_connection = text(&parent, "connectionName")
             .map(|name| find(ef, "moqui.device.DeviceConnection", "connectionName", &name))
             .transpose()?;
-        connection(&parent, parent_connection.as_deref(), &device_id)?
+        connection(ec, ef, &parent, parent_connection.as_deref(), &device_id)?
     } else {
-        connection(&r, c.as_deref(), &device_id)?
+        connection(ec, ef, &r, c.as_deref(), &device_id)?
     };
     if service == ServiceKind::PlcLog && connection.protocol != Protocol::Mqtt {
         return Err(Error::new(format!("PLC log request {name} needs an MQTT endpoint")));
