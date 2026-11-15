@@ -142,23 +142,13 @@ pub fn read_items(items: &[&Item], bytes: &[u8]) -> Result<Vec<ItemResult>, Devi
         .collect())
 }
 
-/// The message of one item: the envelope of moqui-plc4j (`parameterId` and the value field of its kind), plus the value
-/// under the item name.
-pub fn write_item_payload(i: &Item, input: &RequestInput) -> Result<Vec<u8>, DeviceGatewayError> {
-    if matches!(
-        i.name.as_str(),
-        "parameterId" | "numericValue" | "symbolicValue" | "parameterEnumId"
-    ) {
-        return Err(DeviceGatewayError::invalid("Reserved MQTT item name"));
-    }
+fn item_write_fields(i: &Item, input: &RequestInput) -> Result<(&'static str, Value, Value), DeviceGatewayError> {
     let value = input
         .values
         .get(&i.parameter_id)
         .ok_or_else(|| DeviceGatewayError::invalid("Missing MQTT write value"))?;
-    let mut p = Map::new();
-    p.insert("parameterId".into(), Value::String(i.parameter_id.clone()));
     let v = to_json(value)?;
-    let (field, envelope, named) = match (i.kind, value) {
+    Ok(match (i.kind, value) {
         (ParameterKind::Numeric, _) => ("numericValue", v.clone(), v),
         (ParameterKind::Indicator, FieldValue::Bool(b)) => {
             ("symbolicValue", Value::String(if *b { "Y" } else { "N" }.into()), v)
@@ -180,9 +170,51 @@ pub fn write_item_payload(i: &Item, input: &RequestInput) -> Result<Vec<u8>, Dev
         }
         (ParameterKind::Text, _) => ("symbolicValue", v.clone(), v),
         _ => return Err(DeviceGatewayError::invalid("Invalid MQTT indicator/bitset value")),
-    };
+    })
+}
+
+/// The message of one item: the envelope of moqui-plc4j (`parameterId` and the value field of its kind), plus the value
+/// under the item name.
+pub fn write_item_payload(i: &Item, input: &RequestInput) -> Result<Vec<u8>, DeviceGatewayError> {
+    if matches!(
+        i.name.as_str(),
+        "parameterId" | "numericValue" | "symbolicValue" | "parameterEnumId"
+    ) {
+        return Err(DeviceGatewayError::invalid("Reserved MQTT item name"));
+    }
+    let (field, envelope, named) = item_write_fields(i, input)?;
+    let mut p = Map::new();
+    p.insert("parameterId".into(), Value::String(i.parameter_id.clone()));
     p.insert(field.into(), envelope);
     if !i.name.is_empty() {
+        p.insert(i.name.clone(), named);
+    }
+    serde_json::to_vec(&p).map_err(|e| DeviceGatewayError::invalid(e.to_string()))
+}
+
+/// The message for the items targeting a single topic: [`write_item_payload`] when one item targets the topic, or one
+/// combined JSON object keyed by item name when multiple items share the topic.
+pub fn write_items_payload(items: &[&Item], input: &RequestInput) -> Result<Vec<u8>, DeviceGatewayError> {
+    if let [item] = items {
+        return write_item_payload(item, input);
+    }
+    let mut p = Map::new();
+    for i in items {
+        if i.name.is_empty() {
+            return Err(DeviceGatewayError::invalid(
+                "Multi-item MQTT topic write requires item names",
+            ));
+        }
+        if matches!(
+            i.name.as_str(),
+            "parameterId" | "numericValue" | "symbolicValue" | "parameterEnumId"
+        ) {
+            return Err(DeviceGatewayError::invalid("Reserved MQTT item name"));
+        }
+        if p.contains_key(&i.name) {
+            return Err(DeviceGatewayError::invalid("Duplicate MQTT item name"));
+        }
+        let (_, _, named) = item_write_fields(i, input)?;
         p.insert(i.name.clone(), named);
     }
     serde_json::to_vec(&p).map_err(|e| DeviceGatewayError::invalid(e.to_string()))

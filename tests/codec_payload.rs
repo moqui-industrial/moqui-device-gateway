@@ -210,3 +210,32 @@ fn mqtt_bit_and_indicator_envelopes_match_gateway_fields() {
     assert_eq!(p["symbolicValue"], "Y");
     assert_eq!(p["temperature"], true);
 }
+
+#[test]
+fn mqtt_multi_item_topic_write_combines_named_fields() {
+    let mut r = common::request(Protocol::Mqtt, "mqtt://localhost".into(), Operation::Write);
+    r.items[0].name = "tempSetpoint".into();
+    r.items[0].parameter_id = "HvacTempSetpoint".into();
+    let mut second = r.items[0].clone();
+    second.name = "rhSetpoint".into();
+    second.parameter_id = "HvacRhSetpoint".into();
+    r.items.push(second);
+    let input = RequestInput {
+        values: std::collections::BTreeMap::from([
+            ("HvacTempSetpoint".into(), FieldValue::Float(23.5)),
+            ("HvacRhSetpoint".into(), FieldValue::Float(45.0)),
+        ]),
+        ..Default::default()
+    };
+    let single: serde_json::Value =
+        serde_json::from_slice(&payload::write_items_payload(&[&r.items[0]], &input).unwrap()).unwrap();
+    assert_eq!(single["parameterId"], "HvacTempSetpoint");
+    assert_eq!(single["numericValue"], 23.5);
+    assert_eq!(single["tempSetpoint"], 23.5);
+
+    let combined: serde_json::Value =
+        serde_json::from_slice(&payload::write_items_payload(&[&r.items[0], &r.items[1]], &input).unwrap()).unwrap();
+    assert_eq!(combined["tempSetpoint"], 23.5);
+    assert_eq!(combined["rhSetpoint"], 45.0);
+    assert!(combined.get("parameterId").is_none());
+}

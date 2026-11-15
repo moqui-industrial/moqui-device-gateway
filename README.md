@@ -89,7 +89,7 @@ The `requestTypeEnumId` of a `DeviceRequest` gives the operation:
 | --- | --- | --- | --- |
 | `DrtRead` | error: a topic has no value to read | typed values, per-node status and source timestamps | coils and typed registers; indexed bulk reads |
 | `DrtRead` with `pollingInterval` | error | reads at the interval | reads at the interval |
-| `DrtWrite` | JSON values or one payload message; QoS 0/1/2 | typed values | coils and registers; grouped bulk writes |
+| `DrtWrite` | JSON values (grouped into one JSON object per topic) or one payload message; QoS 0/1/2 | typed values | coils and registers; grouped bulk writes |
 | `DrtSubscribe`, `DrtEvent` | broker subscription with SUBACK and reconnect | `DrtSubscribe` as `DrtStateChange`; events are not implemented | error |
 | `DrtStateChange` | as `DrtSubscribe` | monitored items, reported on change | error |
 | `DrtCyclic` | error: a broker sends each message | monitored items sampled every `pollingInterval` | error |
@@ -116,8 +116,7 @@ setpoint by the target device; QoS 0 only confirms local transmission.
   `byte-order=big-endian&word-order=big-endian`. Addresses use PLC4J-style
   zero-based offsets, e.g. `holding-register:2:UINT` or
   `holding-register:10:REAL`. No 40001 adjustment is inferred.
-* MQTT: endpoint `mqtt://host:1883` or `mqtts://host:8883`; the topic is the
-  item address. Options include `protocol-version=3|5`, `qos=0|1|2`, `retain`,
+* MQTT: endpoint configured via `DeviceRequest.brokerUri`, or defaulting to `device_mqtt_broker_uri` from `MoquiConf.xml` (e.g. `paho-mqtt5:?brokerUrl=tcp://host:1883&qos=1` or `mqtt://host:1883`). Message brokers do not use `DeviceConnection` (reserved for point-to-point fieldbus connections). Multi-item writes sharing the same topic are grouped into a single JSON dictionary message. The topic is the item address. Options include `protocol-version=3|5`, `qos=0|1|2`, `retain`,
   `clean-start`, `session-expiry-seconds`, `automatic-reconnect`,
   `max-reconnect-delay-ms`, `receive-maximum` and `client-id`. Subscriptions
   have stable client IDs; finite calls use distinct IDs. TLS supports system

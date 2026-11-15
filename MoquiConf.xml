@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <moqui-conf>
+    <!-- Default MQTT broker endpoint when DeviceRequest.brokerUri is not specified -->
+    <default-property name="device_mqtt_broker_uri" value="paho-mqtt5:?brokerUrl=tcp://localhost:1883&amp;qos=1"/>
     <!-- Moqui notification after this many seconds of failing stores of a request; false turns it off -->
     <default-property name="device_gateway_error_notification" value="true"/>
     <default-property name="device_gateway_error_notification_seconds" value="60"/>

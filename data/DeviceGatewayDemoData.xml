@@ -16,5 +16,6 @@ along with this software (see the LICENSE.md file). If not, see
     <!-- The fieldbus requests of moqui-device's HVAC demo and trajectory planner data run on the drivers of this
          component. -->
     <moqui.device.DeviceRequest requestName="HVAC_DEMO_LiveParametersWrite" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
+    <moqui.device.DeviceRequest requestName="HVAC_DEMO_PlcLogSubscribe" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#PlcLogRequest"/>
     <moqui.device.DeviceRequest requestName="ROBOT_ARM_TRAJECTORY_EXPORT" runServiceName="moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest"/>
 </entity-facade-xml>

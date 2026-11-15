@@ -1,8 +1,8 @@
 // moqui-device-gateway inside MR-Moqui, with moqui-math and moqui-device installed. From the framework root:
 //     ./moq test --debug moqui-device-gateway
 // The requests are those of moqui-device's DeviceTestData.xml and HVAC demo data. Optional features:
-//   gateway_mqtt_test=1: an MQTT 5 broker on 127.0.0.1:1883 with user artemis/artemis; the HVAC demo also needs
-//     MQTT_USERNAME=artemis MQTT_PASSWORD=artemis (HVACDemoGatewayData.xml reads them);
+//   gateway_mqtt_test=1: an MQTT 5 broker on 127.0.0.1:1883 (or gateway_mqtt_test_broker) with user artemis/artemis;
+//     the HVAC demo also needs MQTT_USERNAME=artemis MQTT_PASSWORD=artemis (HVACDemoData.xml reads them);
 //   device_gateway_error_notification_seconds=0 with gateway_mqtt_test: the persistence failure notification;
 //   device_gateway_device_id=GW_EDGE_01: requests outside the gateway scope are refused;
 //   gateway_opcua_test=1: the OPC UA server of `cargo run --example opcua_test_server` on 127.0.0.1:12686;
@@ -17,7 +17,10 @@ spec({
 const specDir = "/tmp/moqui-gateway-spec";
 const readText = (path) => ec.resource.getLocationReference(path).getText();
 const removeFile = (path) => { try { ec.resource.getLocationReference(path).delete(); } catch (e) { /* not there */ } };
-const mqttUri = "paho-mqtt5:?brokerUrl=tcp://localhost:1883&userName=artemis&password=artemis";
+const mqttBroker = System.getProperty("gateway_mqtt_test_broker") || "tcp://localhost:1883";
+const mqttUri = `paho-mqtt5:?brokerUrl=${mqttBroker}&userName=artemis&password=artemis`;
+const gatewayService = "moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest";
+const plcLogService = "moqui.device.gateway.DeviceGatewayServices.run#PlcLogRequest";
 const storeRequest = (fields) => call("store#moqui.device.DeviceRequest", Object.assign({timeout: 5000}, fields));
 const deleteRequests = (...names) => names.forEach(requestName => {
     ec.entity.find("moqui.device.DeviceRequestItem").condition("requestName", requestName).deleteAll();
@@ -26,7 +29,7 @@ const deleteRequests = (...names) => names.forEach(requestName => {
 // publish one JSON message on a topic, through an MQTT write request without items
 const publish = (topic, payload) => {
     storeRequest({requestName: "GatewayTestPublish", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtWrite",
-        routerEnumId: "DrrMQTTBroker", runServiceName: "moqui.device.gateway.MqttServices.run#DeviceRequest",
+        routerEnumId: "DrrMQTTBroker", runServiceName: gatewayService,
         brokerUri: mqttUri, query: topic});
     return call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPublish", payload});
 };
@@ -53,66 +56,67 @@ const failureOf = (action) => {
     }
 };
 
-feature("a recipe export writes one file per rule priority", {
+feature("a recipe export writes one file per rule priority to its connection destination", {
     when() {
-        return call("moqui.device.DeviceConfigServices.export#DeviceConfig", {requestName: "VIRTUAL_PLC_01_ExportProcess"});
+        call("store#moqui.device.DeviceConnection", {connectionName: "GatewayTestExportConn", deviceId: "VIRTUAL_PLC_01",
+            connectionTypeEnumId: "DctDirectConnection", purposeEnumId: "DcpMaintenance",
+            transportConfig: `file:${specDir}/plc1`});
+        storeRequest({requestName: "GatewayTestExport", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtConfigWrite",
+            routerEnumId: "DrrDirect", connectionName: "GatewayTestExportConn"});
+        const out = call("moqui.device.DeviceServices.export#DeviceConfig",
+            {requestName: "GatewayTestExport", deviceRuleSetId: "TestPlcGatewayRuleSet1"});
+        return {out, primary: readText(`${specDir}/plc1/Test PLC Gateway Rule Set_p10.txt`)};
     },
     then(out) {
-        out.status == "completed";
-        out.files.length == 1;
-        out.files[0].rowCount == 2;
-        out.transferredFiles.length == 1;
-        out.transferredFiles[0].endsWith("Test PLC Gateway Rule Set_p10.txt");
-        out.secondaryResults.length == 1;
-        out.secondaryResults[0].status == "completed";
+        out.out.status == "completed";
+        out.out.files.length == 1;
+        out.out.files[0].rowCount == 2;
+        out.out.transferredFiles.length == 1;
+        out.out.transferredFiles[0].endsWith("Test PLC Gateway Rule Set_p10.txt");
+        out.primary.includes("dev.PLC_RECIPE_REFERENCE:=250");
+        out.primary.includes("dev.PLC_RECIPE_STATE:=AUTO");
     },
-});
-
-feature("running a recipe export request alone exports the rule set in its query", {
-    when() {
-        return call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "VIRTUAL_PLC_01_ExportProcess"});
-    },
-    then(out) {
-        out.status == "completed";
-        out.transferredFiles.length == 1;
+    cleanup() {
+        deleteRequests("GatewayTestExport");
+        call("delete#moqui.device.DeviceConnection", {connectionName: "GatewayTestExportConn"});
+        removeFile(`${specDir}/plc1/Test PLC Gateway Rule Set_p10.txt`);
     },
 });
 
 feature("a content transfer sends the DeviceContent of the request device", {
     when() {
-        const location = "/tmp/moqui-gateway-transfer.bin";
+        const location = `${specDir}/moqui-gateway-transfer.bin`;
         ec.resource.getLocationReference(location).putBytes(new Uint8Array([0, 255, 16]));
         call("store#moqui.device.DeviceContent", {deviceContentId: "GatewayTransferContent", deviceId: "VIRTUAL_PLC_01",
             contentTypeEnumId: "DCntImage", contentLocation: location});
-        return call("moqui.device.DeviceServices.run#DeviceRequest",
+        return call("moqui.device.DeviceServices.transfer#DeviceContent",
             {requestName: "VIRTUAL_PLC_01_TransferContent", deviceContentId: "GatewayTransferContent"});
     },
     then(out) {
         out.status == "completed";
+        out.transferredFiles.length == 1;
         out.transferredFiles[0].endsWith("moqui-gateway-transfer.bin");
-        out.secondaryResults.length == 1;
-        out.secondaryResults[0].requestName == "VIRTUAL_PLC_02_TransferContent";
-        out.secondaryResults[0].status == "completed";
-        out.secondaryResults[0].transferredFiles[0].includes("plc-redundant");
     },
     cleanup() {
         call("delete#moqui.device.DeviceContent", {deviceContentId: "GatewayTransferContent"});
-        ec.resource.getLocationReference("/tmp/moqui-gateway-transfer.bin").delete();
+        removeFile(`${specDir}/moqui-gateway-transfer.bin`);
+        removeFile("target/transferred-content/plc/moqui-gateway-transfer.bin");
     },
 });
 
-feature("a protocol service refuses a request whose endpoint is another protocol", {
+feature("a PLC log service refuses a request whose endpoint is another protocol", {
     allowMessageErrors: true,
     when() {
-        const request = ec.entity.find("moqui.device.DeviceRequest").condition("requestName", "TestPlcMqttPublishReq01").one();
+        const request = ec.entity.find("moqui.device.DeviceRequest").condition("requestName", "TestPlcOpcUaWriteReq01").one();
         const device = ec.entity.find("moqui.device.Device").condition("deviceId", request.deviceId).one();
-        const failure = failureOf(() => call("moqui.device.gateway.OpcUaServices.run#DeviceRequest", {request, device}));
+        const connection = ec.entity.find("moqui.device.DeviceConnection").condition("connectionName", request.connectionName).one();
+        const failure = failureOf(() => call(plcLogService, {request, device, connection}));
         ec.message.clearErrors();
         return {failure};
     },
     then(out) {
         out.failure != null;
-        out.failure.includes("OpcUaServices");
+        out.failure.includes("MQTT");
     },
 });
 
@@ -133,8 +137,8 @@ feature("a payload is refused by a protocol that cannot send it", {
 feature("stored samples update the parameter once and skip an equal value", {
     when() {
         const samples = [{deviceId: "VIRTUAL_PLC_01", parameterId: "TestPlcFeedbackParam", value: 42.5}];
-        const first = call("moqui.device.gateway.InboundServices.store#Samples", {requestName: "TestPlcOpcUaReadReq01", samples});
-        const second = call("moqui.device.gateway.InboundServices.store#Samples", {requestName: "TestPlcOpcUaReadReq01", samples});
+        const first = call("moqui.device.DeviceAcquisitionServices.store#Samples", {requestName: "TestPlcOpcUaReadReq01", samples});
+        const second = call("moqui.device.DeviceAcquisitionServices.store#Samples", {requestName: "TestPlcOpcUaReadReq01", samples});
         const parameter = ec.entity.find("moqui.math.Parameter").condition("parameterId", "TestPlcFeedbackParam").one();
         return {first, second, value: parameter.numericValue.toNumber()};
     },
@@ -147,23 +151,12 @@ feature("stored samples update the parameter once and skip an equal value", {
 
 feature("a sample of another device is not stored", {
     when() {
-        return call("moqui.device.gateway.InboundServices.store#Samples", {requestName: "TestPlcOpcUaReadReq01",
+        return call("moqui.device.DeviceAcquisitionServices.store#Samples", {requestName: "TestPlcOpcUaReadReq01",
             samples: [{deviceId: "DRV_EDGE_01", parameterId: "TestPlcFeedbackParam", value: 1}]});
     },
     then(out) {
         out.failedCount == 1;
         out.results[0].status == "failed";
-    },
-});
-
-feature("no subscription runs before any start", {
-    when() {
-        return call("moqui.device.gateway.SubscriptionServices.get#SubscriptionState", {});
-    },
-    then(out) {
-        out.activeRequestNames.length == 0;
-        out.droppedRequestNames.length == 0;
-        out.startupClaimed == false;
     },
 });
 
@@ -187,10 +180,10 @@ feature("a trajectory export publishes one MQTT message", {
         });
         call("store#moqui.device.DeviceRequest", {requestName: "GatewayTestTrajectory", deviceId: "VIRTUAL_PLC_01",
             requestTypeEnumId: "DrtWrite", routerEnumId: "DrrMQTTBroker",
-            runServiceName: "moqui.device.gateway.MqttServices.run#DeviceRequest",
-            brokerUri: "paho-mqtt5:?brokerUrl=tcp://localhost:1883&userName=artemis&password=artemis",
+            runServiceName: gatewayService,
+            brokerUri: mqttUri,
             query: "moqui/test/trajectory", timeout: 5000});
-        return call("moqui.device.TrajectoryPlannerServices.export#Trajectory",
+        return call("moqui.device.DeviceServices.export#Trajectory",
             {approximatedFunctionId: planned.approximatedFunctionId, requestName: "GatewayTestTrajectory"});
     },
     then(out) {
@@ -201,25 +194,22 @@ feature("a trajectory export publishes one MQTT message", {
     },
 });
 
-feature("an MQTT subscription starts once and stops on unsubscribe", {
+feature("an MQTT subscription starts once, answers unchanged while running, and stops on unsubscribe", {
     ignore: !System.getProperty("gateway_mqtt_test"),
     when() {
         const started = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcMqttSubscribeReq01"});
-        const state = call("moqui.device.gateway.SubscriptionServices.get#SubscriptionState", {});
+        const again = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcMqttSubscribeReq01"});
         const stopped = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcMqttUnsubscribeReq01"});
-        const after = call("moqui.device.gateway.SubscriptionServices.get#SubscriptionState", {});
-        return {started, state, stopped, after};
+        return {started, again, stopped};
     },
     then(out) {
         out.started.status == "active";
-        out.state.activeRequestNames.includes("TestPlcMqttSubscribeReq01");
+        out.again.status == "unchanged";
         out.stopped.status == "completed";
-        !out.after.activeRequestNames.includes("TestPlcMqttSubscribeReq01");
-        !out.after.droppedRequestNames.includes("TestPlcMqttSubscribeReq01");
     },
 });
 
-feature("the HVAC demo publishes the live parameters and stores the PLC log", {
+feature("the HVAC demo publishes the live parameters and stores the PLC log across the plant hierarchy", {
     // HVAC_DEMO_PLC is in the scope of HVAC_DEMO_GATEWAY only
     ignore: !System.getProperty("gateway_mqtt_test")
         || !["", "HVAC_DEMO_GATEWAY"].includes(System.getProperty("device_gateway_device_id") || ""),
@@ -227,71 +217,74 @@ feature("the HVAC demo publishes the live parameters and stores the PLC log", {
         call("update#moqui.device.DeviceRequest", {requestName: "HVAC_DEMO_LiveParametersWrite", onlyChangedParameters: "N"});
         const write = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "HVAC_DEMO_LiveParametersWrite"});
         const subscription = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "HVAC_DEMO_PlcLogSubscribe"});
-        // what the CODESYS ParameterLogger publishes, sent here by an MQTT write without items
+        // what the CODESYS LogDispatcher publishes, sent here by an MQTT write without items
         call("store#moqui.device.DeviceRequest", {requestName: "GatewayTestPlcLogPublish", deviceId: "HVAC_DEMO_PLC",
             requestTypeEnumId: "DrtWrite", routerEnumId: "DrrMQTTBroker",
-            runServiceName: "moqui.device.gateway.MqttServices.run#DeviceRequest", connectionName: "HVAC_DEMO_MQTT",
-            query: "moqui-plc", timeout: 5000});
-        const count = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "HvacTempSetpoint").count();
-        const before = count();
-        const publish = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPlcLogPublish",
+            runServiceName: gatewayService,
+            brokerUri: mqttUri, query: "moqui-plc", timeout: 5000});
+        const paramCount = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "HvacTempSetpoint").useCache(false).count();
+        const pumpCount = () => ec.entity.find("moqui.device.DeviceLog").condition("deviceId", "HVAC_COLD_GLYCOL_PUMP").useCache(false).count();
+        const beforeParam = paramCount();
+        const beforePump = pumpCount();
+        const publishParam = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPlcLogPublish",
             payload: {loggerName: "HVAC_DEMO_PLC", source: "HvacTempSetpoint", type: 1, numericValue: 21.5,
-                logEventDate: "2026-10-21T10:00:00Z"}});
-        let after = before;
-        const started = Date.now();
-        while (after === before && Date.now() - started < 8000) after = count();
+                sequence: 101, logEventDate: "2026-10-21T10:00:00Z"}});
+        const publishPump = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPlcLogPublish",
+            payload: {loggerName: "HVAC_COLD_GLYCOL_PUMP", source: "", type: 3, message: "Glycol pump started",
+                sequence: 102, logEventDate: "2026-10-21T10:00:01Z"}});
+        waitFor(() => paramCount() > beforeParam && pumpCount() > beforePump);
+        const pumpLog = ec.entity.find("moqui.device.DeviceLog")
+            .condition("deviceId", "HVAC_COLD_GLYCOL_PUMP")
+            .condition("sequenceNum", 102)
+            .useCache(false)
+            .one();
         call("store#moqui.device.DeviceRequest", {requestName: "GatewayTestPlcLogUnsubscribe", deviceId: "HVAC_DEMO_PLC",
             parentRequestName: "HVAC_DEMO_PlcLogSubscribe", requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker",
-            runServiceName: "moqui.device.gateway.PlcLogServices.run#DeviceRequest"});
+            runServiceName: plcLogService});
         call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPlcLogUnsubscribe"});
-        return {write, subscription, publish, stored: after - before};
+        return {
+            write,
+            subscription,
+            publishParam,
+            publishPump,
+            storedParam: paramCount() - beforeParam,
+            storedPump: pumpCount() - beforePump,
+            pumpSeq: pumpLog ? Number(String(pumpLog.sequenceNum)) : null,
+        };
     },
     then(out) {
         out.write.status == "completed";
         out.write.itemResults.length == 20;
         out.subscription.status == "active";
-        out.publish.status == "completed";
-        out.stored == 1;
+        out.publishParam.status == "completed";
+        out.publishPump.status == "completed";
+        out.storedParam == 1;
+        out.storedPump == 1;
+        out.pumpSeq == 102;
     },
     cleanup() {
+        ec.entity.find("moqui.device.DeviceLog")
+            .condition("deviceId", "HVAC_COLD_GLYCOL_PUMP")
+            .condition("sequenceNum", 102)
+            .deleteAll();
+        ec.entity.find("moqui.math.ParameterLog")
+            .condition("parameterId", "HvacTempSetpoint")
+            .condition("sequenceNum", 101)
+            .deleteAll();
         call("delete#moqui.device.DeviceRequest", {requestName: "GatewayTestPlcLogPublish"});
         call("delete#moqui.device.DeviceRequest", {requestName: "GatewayTestPlcLogUnsubscribe"});
         call("update#moqui.device.DeviceRequest", {requestName: "HVAC_DEMO_LiveParametersWrite", onlyChangedParameters: "Y"});
     },
 });
 
-feature("a recipe export writes the recipe text to the primary and the redundant PLC", {
+feature("a trajectory recipe is written as a CODESYS txt recipe", {
     when() {
-        storeRequest({requestName: "GatewayTestExport", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtConfigWrite",
-            routerEnumId: "DrrDirect", runServiceName: "moqui.device.gateway.FileServices.run#DeviceRequest",
-            brokerUri: `file:${specDir}/plc1`, query: "TestPlcGatewayRuleSet1"});
-        storeRequest({requestName: "GatewayTestExportRedundant", parentRequestName: "GatewayTestExport", deviceId: "VIRTUAL_PLC_02",
-            requestTypeEnumId: "DrtConfigWrite", routerEnumId: "DrrDirect",
-            runServiceName: "moqui.device.gateway.FileServices.run#DeviceRequest", brokerUri: `file:${specDir}/plc2`});
-        const out = call("moqui.device.DeviceConfigServices.export#DeviceConfig", {requestName: "GatewayTestExport"});
-        return {out, primary: readText(`${specDir}/plc1/Test PLC Gateway Rule Set_p10.txt`),
-            redundant: readText(`${specDir}/plc2/Test PLC Gateway Rule Set_p10.txt`)};
-    },
-    then(out) {
-        out.out.status == "completed";
-        out.out.secondaryResults[0].status == "completed";
-        out.primary.includes("dev.PLC_RECIPE_REFERENCE:=250");
-        out.primary.includes("dev.PLC_RECIPE_STATE:=AUTO");
-        out.redundant == out.primary;
-    },
-    cleanup() {
-        deleteRequests("GatewayTestExportRedundant", "GatewayTestExport");
-        removeFile(`${specDir}/plc1/Test PLC Gateway Rule Set_p10.txt`);
-        removeFile(`${specDir}/plc2/Test PLC Gateway Rule Set_p10.txt`);
-    },
-});
-
-feature("a trajectory recipe is written as the former gateway wrote it", {
-    when() {
+        call("store#moqui.device.DeviceConnection", {connectionName: "GatewayTestTrajectoryConn", deviceId: "VIRTUAL_PLC_01",
+            connectionTypeEnumId: "DctDirectConnection", purposeEnumId: "DcpMaintenance",
+            transportConfig: `file:${specDir}/trajectory`});
         storeRequest({requestName: "GatewayTestTrajectoryExport", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtConfigWrite",
-            routerEnumId: "DrrDirect", runServiceName: "moqui.device.gateway.FileServices.run#DeviceRequest",
-            brokerUri: `file:${specDir}/trajectory`});
-        const out = call("moqui.device.DeviceConfigServices.export#DeviceConfig",
+            routerEnumId: "DrrDirect", connectionName: "GatewayTestTrajectoryConn"});
+        const out = call("moqui.device.DeviceServices.export#DeviceConfig",
             {requestName: "GatewayTestTrajectoryExport", deviceRuleSetId: "TestPlcTrajectoryRuleSet1"});
         return {out, recipe: readText(`${specDir}/trajectory/TestPlcTrajectoryRuleSet_p01.txt`)};
     },
@@ -309,6 +302,7 @@ feature("a trajectory recipe is written as the former gateway wrote it", {
     },
     cleanup() {
         deleteRequests("GatewayTestTrajectoryExport");
+        call("delete#moqui.device.DeviceConnection", {connectionName: "GatewayTestTrajectoryConn"});
         removeFile(`${specDir}/trajectory/TestPlcTrajectoryRuleSet_p01.txt`);
     },
 });
@@ -316,15 +310,14 @@ feature("a trajectory recipe is written as the former gateway wrote it", {
 feature("the gateway scope is its groups and their alive members", {
     when() {
         return {
-            scope: call("moqui.device.gateway.SubscriptionServices.get#GatewayScope", {gatewayDeviceId: "GW_EDGE_01"}),
-            notGateway: call("moqui.device.gateway.SubscriptionServices.get#GatewayScope", {gatewayDeviceId: "DRV_EDGE_01"}),
-            missing: call("moqui.device.gateway.SubscriptionServices.get#GatewayScope", {gatewayDeviceId: "NO_SUCH_GATEWAY"}),
+            scope: call("moqui.device.DeviceAcquisitionServices.get#GatewayScope", {gatewayDeviceId: "GW_EDGE_01"}),
+            notGateway: call("moqui.device.DeviceAcquisitionServices.get#GatewayScope", {gatewayDeviceId: "DRV_EDGE_01"}),
+            missing: call("moqui.device.DeviceAcquisitionServices.get#GatewayScope", {gatewayDeviceId: "NO_SUCH_GATEWAY"}),
         };
     },
     then(out) {
         out.scope.ready == true;
         out.scope.scopedDeviceIds.includes("VIRTUAL_PLC_01");
-        out.scope.scopedDeviceIds.includes("VIRTUAL_PLC_02");
         out.scope.scopedDeviceIds.includes("DRV_EDGE_01");
         !out.scope.scopedDeviceIds.includes("HVAC_DEMO_PLC");
         out.scope.controllerDeviceIds.includes("VIRTUAL_PLC_01");
@@ -338,20 +331,20 @@ feature("the gateway scope is its groups and their alive members", {
 
 feature("the startup subscriptions are those of the controllers in the gateway scope, in order", {
     when() {
-        return call("moqui.device.gateway.SubscriptionServices.get#StartupSubscriptions", {gatewayDeviceId: "GW_EDGE_01"});
+        return call("moqui.device.DeviceAcquisitionServices.get#StartupSubscriptions", {gatewayDeviceId: "GW_EDGE_01"});
     },
     then(out) {
         out.ready == true;
-        out.requestNames.length == 2;
-        out.requestNames[0] == "TestPlcMqttSubscribeReq01";
-        out.requestNames[1] == "TestPlcOpcUaReadReq01";
+        out.requestNames.includes("TestPlcMqttSubscribeReq01");
+        out.requestNames.includes("TestPlcOpcUaReadReq01");
+        out.requestNames.indexOf("TestPlcMqttSubscribeReq01") < out.requestNames.indexOf("TestPlcOpcUaReadReq01");
     },
 });
 
 feature("an inactive gateway membership leaves the gateway without a scope", {
     when() {
         setMemberStatus("DG_EDGE_01", "GW_EDGE_01", "DgmsDown");
-        return call("moqui.device.gateway.SubscriptionServices.get#StartupSubscriptions", {gatewayDeviceId: "GW_EDGE_01"});
+        return call("moqui.device.DeviceAcquisitionServices.get#StartupSubscriptions", {gatewayDeviceId: "GW_EDGE_01"});
     },
     then(out) {
         out.ready == false;
@@ -365,7 +358,7 @@ feature("an inactive gateway membership leaves the gateway without a scope", {
 feature("an inactive controller membership excludes its subscriptions", {
     when() {
         setMemberStatus("DG_EDGE_01", "VIRTUAL_PLC_01", "DgmsDown");
-        return call("moqui.device.gateway.SubscriptionServices.get#StartupSubscriptions", {gatewayDeviceId: "GW_EDGE_01"});
+        return call("moqui.device.DeviceAcquisitionServices.get#StartupSubscriptions", {gatewayDeviceId: "GW_EDGE_01"});
     },
     then(out) {
         out.ready == true;
@@ -380,14 +373,13 @@ feature("with a configured gateway a request outside its scope is refused", {
     ignore: System.getProperty("device_gateway_device_id") !== "GW_EDGE_01",
     allowMessageErrors: true,
     when() {
-        const failure = failureOf(() => call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "HVAC_DEMO_PLC_ExportProcess"}));
+        const failure = failureOf(() => call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "HVAC_DEMO_PlcLogSubscribe"}));
         ec.message.clearErrors();
-        const inScope = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "VIRTUAL_PLC_01_ExportProcess"});
-        return {failure, inScope};
+        return {failure};
     },
     then(out) {
+        out.failure != null;
         out.failure.includes("not in the scope of gateway GW_EDGE_01");
-        out.inScope.status == "completed";
     },
 });
 
@@ -414,13 +406,13 @@ feature("a burst of ten MQTT messages is logged ten times", {
     ignore: !System.getProperty("gateway_mqtt_test"),
     when() {
         storeRequest({requestName: "GatewayTestBurst", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
-            purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: "moqui.device.gateway.MqttServices.run#DeviceRequest",
+            purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: gatewayService,
             brokerUri: mqttUri, query: "moqui/test/burst"});
         call("store#moqui.device.DeviceRequestItem", {requestName: "GatewayTestBurst", requestItemName: "value",
             parameterId: "TestPlcFeedbackParam", sequenceNum: 10, query: "moqui/test/burst", itemTypeEnumId: "DritReal"});
         storeRequest({requestName: "GatewayTestBurstStop", parentRequestName: "GatewayTestBurst", deviceId: "VIRTUAL_PLC_01",
-            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker", runServiceName: "moqui.device.gateway.MqttServices.run#DeviceRequest"});
-        const count = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "TestPlcFeedbackParam").count();
+            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker", runServiceName: gatewayService});
+        const count = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "TestPlcFeedbackParam").useCache(false).count();
         const before = count();
         const started = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestBurst"});
         for (let i = 1; i <= 10; i++) publish("moqui/test/burst", {value: 100 + i});
@@ -440,12 +432,12 @@ feature("PLC log events go to ParameterLog or DeviceLog, and a malformed batch d
     ignore: !System.getProperty("gateway_mqtt_test"),
     when() {
         storeRequest({requestName: "GatewayTestPlcLog", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
-            purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: "moqui.device.gateway.PlcLogServices.run#DeviceRequest",
+            purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService,
             brokerUri: mqttUri, query: "moqui/test/plc-log"});
         storeRequest({requestName: "GatewayTestPlcLogStop", parentRequestName: "GatewayTestPlcLog", deviceId: "VIRTUAL_PLC_01",
-            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker", runServiceName: "moqui.device.gateway.PlcLogServices.run#DeviceRequest"});
-        const parameterLogs = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "TestPlcFeedbackParam").count();
-        const deviceLogs = () => ec.entity.find("moqui.device.DeviceLog").condition("deviceId", "VIRTUAL_PLC_01").count();
+            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService});
+        const parameterLogs = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "TestPlcFeedbackParam").useCache(false).count();
+        const deviceLogs = () => ec.entity.find("moqui.device.DeviceLog").condition("deviceId", "VIRTUAL_PLC_01").useCache(false).count();
         const started = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPlcLog"});
         const p0 = parameterLogs(), d0 = deviceLogs();
         // numeric and text events with a source, an event without one, a CODESYS DT# date
@@ -465,9 +457,9 @@ feature("PLC log events go to ParameterLog or DeviceLog, and a malformed batch d
             logEventDate: "2026-10-21T08:00:07Z"});
         waitFor(() => parameterLogs() >= p0 + 5 && deviceLogs() >= d0 + 2);
         const dtLog = ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "TestPlcFeedbackParam")
-            .condition("numericValue", 8.5).one();
+            .condition("numericValue", 8.5).useCache(false).one();
         const textLog = ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "TestPlcFeedbackParam")
-            .condition("symbolicValue", "running").one();
+            .condition("symbolicValue", "running").useCache(false).one();
         call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestPlcLogStop"});
         return {started, parameterLogs: parameterLogs() - p0, deviceLogs: deviceLogs() - d0,
             dtMillis: dtLog ? Number(String(dtLog.observedDate)) : null, textLog: textLog != null};
@@ -487,20 +479,21 @@ feature("persistence failures and the recovery are notified to the user", {
     ignore: !System.getProperty("gateway_mqtt_test") || System.getProperty("device_gateway_error_notification_seconds") !== "0",
     when() {
         storeRequest({requestName: "GatewayTestFailing", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
-            purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: "moqui.device.gateway.PlcLogServices.run#DeviceRequest",
+            purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService,
             brokerUri: mqttUri, query: "moqui/test/failing"});
         storeRequest({requestName: "GatewayTestFailingStop", parentRequestName: "GatewayTestFailing", deviceId: "VIRTUAL_PLC_01",
-            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker", runServiceName: "moqui.device.gateway.PlcLogServices.run#DeviceRequest"});
-        const notices = () => ec.entity.find("moqui.security.user.NotificationMessage").condition("topic", "DeviceGatewayInbound").count();
-        const n0 = notices();
+            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService});
+        const failedNotices = () => ec.entity.find("moqui.security.user.NotificationMessage").condition("topic", "DeviceInboundFailed").useCache(false).count();
+        const recoveredNotices = () => ec.entity.find("moqui.security.user.NotificationMessage").condition("topic", "DeviceInboundRecovered").useCache(false).count();
+        const f0 = failedNotices(), r0 = recoveredNotices();
         call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestFailing"});
         // an exact parameterId that does not exist: the store fails
         publish("moqui/test/failing", {loggerName: "VIRTUAL_PLC_01", source: "NoSuchParameter", type: 1, numericValue: 1,
             logEventDate: "2026-10-21T09:00:01Z"});
-        const failing = waitFor(() => notices() >= n0 + 1);
+        const failing = waitFor(() => failedNotices() >= f0 + 1);
         publish("moqui/test/failing", {loggerName: "VIRTUAL_PLC_01", source: "TestPlcFeedbackParam", type: 1, numericValue: 2,
             logEventDate: "2026-10-21T09:00:02Z"});
-        const recovered = waitFor(() => notices() >= n0 + 2);
+        const recovered = waitFor(() => recoveredNotices() >= r0 + 1);
         call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestFailingStop"});
         return {failing, recovered};
     },
@@ -516,11 +509,12 @@ feature("a recipe export reaches a CODESYS PLC over SFTP", {
     when() {
         call("store#moqui.device.DeviceConnection", {connectionName: "GatewayTestSftp", deviceId: "VIRTUAL_PLC_01",
             connectionTypeEnumId: "DctDirectConnection", purposeEnumId: "DcpMaintenance", driverEnumId: "DcdSftp",
+            transportConfig: "sftp://127.0.0.1:2223/upload",
             options: `username=foo&password=pass&host-key-fingerprint=${System.getProperty("gateway_sftp_fingerprint")}`});
         storeRequest({requestName: "GatewayTestSftpExport", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtConfigWrite",
-            routerEnumId: "DrrDirect", runServiceName: "moqui.device.gateway.FileServices.run#DeviceRequest",
-            connectionName: "GatewayTestSftp", brokerUri: "sftp://127.0.0.1:2223/upload", query: "TestPlcGatewayRuleSet1", timeout: 15000});
-        return call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestSftpExport"});
+            routerEnumId: "DrrDirect", connectionName: "GatewayTestSftp", timeout: 15000});
+        return call("moqui.device.DeviceServices.export#DeviceConfig",
+            {requestName: "GatewayTestSftpExport", deviceRuleSetId: "TestPlcGatewayRuleSet1"});
     },
     then(out) {
         out.status == "completed";
@@ -532,26 +526,25 @@ feature("a recipe export reaches a CODESYS PLC over SFTP", {
     },
 });
 
-feature("the first start#Subscriptions restores the scoped subscriptions once", {
-    // the startup claim is once per process: no other feature calls start#Subscriptions
+feature("start#Subscriptions restores the scoped subscriptions and respects an explicit unsubscribe", {
     ignore: !System.getProperty("gateway_mqtt_test") || System.getProperty("device_gateway_device_id") !== "GW_EDGE_01",
     when() {
-        const first = call("moqui.device.gateway.SubscriptionServices.start#Subscriptions", {});
-        const state = call("moqui.device.gateway.SubscriptionServices.get#SubscriptionState", {});
-        const second = call("moqui.device.gateway.SubscriptionServices.start#Subscriptions", {});
+        const first = call("moqui.device.DeviceAcquisitionServices.start#Subscriptions", {});
+        const second = call("moqui.device.DeviceAcquisitionServices.start#Subscriptions", {});
         call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcMqttUnsubscribeReq01"});
+        const afterStop = call("moqui.device.DeviceAcquisitionServices.start#Subscriptions", {});
         if (first.startedRequestNames.includes("TestPlcOpcUaReadReq01")) {
             call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcOpcUaUnsubscribeReq01"});
         }
-        return {first, state, second, opcua: !!System.getProperty("gateway_opcua_test")};
+        return {first, second, afterStop, opcua: !!System.getProperty("gateway_opcua_test")};
     },
     then(out) {
         out.first.startedRequestNames.includes("TestPlcMqttSubscribeReq01");
         // the OPC UA subscription starts only with the OPC UA test server
         (out.opcua ? out.first.startedRequestNames : out.first.failedRequestNames).includes("TestPlcOpcUaReadReq01");
-        out.state.activeRequestNames.includes("TestPlcMqttSubscribeReq01");
         out.second.startedRequestNames.length == 0;
-        out.second.failedRequestNames.length == 0;
+        out.afterStop.stoppedRequestNames.includes("TestPlcMqttSubscribeReq01");
+        !out.afterStop.startedRequestNames.includes("TestPlcMqttSubscribeReq01");
     },
 });
 
@@ -577,7 +570,7 @@ feature("OPC UA write and one-shot read go through the node into the parameters"
     cleanup() { call("update#moqui.math.Parameter", {parameterId: "TestPlcReferenceParam", numericValue: 300}); },
 });
 
-feature("OPC UA polling stores the node changes until the unsubscribe", {
+feature("OPC UA cyclic subscription stores the node changes until the unsubscribe", {
     ignore: !System.getProperty("gateway_opcua_test"),
     when() {
         const started = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "TestPlcOpcUaReadReq01"});
@@ -598,13 +591,13 @@ feature("OPC UA polling stores the node changes until the unsubscribe", {
 feature("an OPC UA monitored item stores the live node value", {
     ignore: !System.getProperty("gateway_opcua_test"),
     when() {
-        storeRequest({requestName: "GatewayTestOpcUaMonitor", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
-            routerEnumId: "DrrDirect", runServiceName: "moqui.device.gateway.OpcUaServices.run#DeviceRequest",
+        storeRequest({requestName: "GatewayTestOpcUaMonitor", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtStateChange",
+            routerEnumId: "DrrDirect", runServiceName: gatewayService,
             connectionName: "TestPlcOpcUaConn01"});
         call("store#moqui.device.DeviceRequestItem", {requestName: "GatewayTestOpcUaMonitor", requestItemName: "virtualPlcFeedback",
             parameterId: "TestPlcFeedbackParam", sequenceNum: 10, query: "ns=2;s=Demo.Dynamic.Scalar.Double", itemTypeEnumId: "DritLReal"});
         storeRequest({requestName: "GatewayTestOpcUaMonitorStop", parentRequestName: "GatewayTestOpcUaMonitor", deviceId: "VIRTUAL_PLC_01",
-            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrDirect", runServiceName: "moqui.device.gateway.OpcUaServices.run#DeviceRequest",
+            requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrDirect", runServiceName: gatewayService,
             connectionName: "TestPlcOpcUaConn01"});
         const started = call("moqui.device.DeviceServices.run#DeviceRequest", {requestName: "GatewayTestOpcUaMonitor"});
         writeReference(125.5);

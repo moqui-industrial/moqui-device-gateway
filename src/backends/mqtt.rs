@@ -350,28 +350,42 @@ impl DeviceFacade for MqttDeviceClient {
             let mut session = Session::new(r, &config)?;
             return publish(&mut session, &topic, bytes.clone(), &config, deadline).await;
         }
-        // Validate every command before sending the first one. Never retry a finite write.
-        let plans = r
-            .items
-            .iter()
-            .map(|item| {
-                let topic = topic(r, Some(item))?;
-                publish_topic(&topic)?;
-                Ok((item, topic, payload::write_item_payload(item, input)?))
+        // Validate every command before sending the first one, grouping items that share a topic into one payload.
+        let mut by_topic: Vec<(String, Vec<&Item>)> = Vec::new();
+        for item in &r.items {
+            let topic = topic(r, Some(item))?;
+            publish_topic(&topic)?;
+            if let Some((_, group)) = by_topic.iter_mut().find(|(t, _)| *t == topic) {
+                group.push(item);
+            } else {
+                by_topic.push((topic, vec![item]));
+            }
+        }
+        let plans = by_topic
+            .into_iter()
+            .map(|(topic, items)| {
+                let bytes = payload::write_items_payload(&items, input)?;
+                Ok((topic, items, bytes))
             })
             .collect::<Result<Vec<_>, DeviceGatewayError>>()?;
         if plans.is_empty() {
             return Err(DeviceGatewayError::invalid("MQTT write has no items"));
         }
         let mut session = Session::new(r, &config)?;
-        for (item, topic, bytes) in plans {
+        for (topic, items, bytes) in plans {
             match publish(&mut session, &topic, bytes, &config, deadline).await {
-                Ok(()) => out.items.push(ItemResult::value(
-                    &item.parameter_id,
-                    input.values[&item.parameter_id].clone(),
-                )),
+                Ok(()) => {
+                    for item in items {
+                        out.items.push(ItemResult::value(
+                            &item.parameter_id,
+                            input.values[&item.parameter_id].clone(),
+                        ));
+                    }
+                }
                 Err(error) => {
-                    out.items.push(ItemResult::error(&item.parameter_id, error.clone()));
+                    for item in items {
+                        out.items.push(ItemResult::error(&item.parameter_id, error.clone()));
+                    }
                     return Err(error);
                 }
             }

@@ -30,8 +30,9 @@ along with this software (see the LICENSE.md file). If not, see
 
             DrtRead reads the items once and stores the values (DeviceAcquisitionServices.store#Samples); with a
             pollingInterval it polls: it reads again every pollingInterval milliseconds until a DrtUnsubscribe. MQTT has
-            no read. DrtWrite writes the values of the item Parameters; an MQTT write without items publishes the
-            payload parameter as JSON on DeviceRequest.query. DrtStateChange, DrtCyclic and DrtEvent subscribe (the
+            no read. DrtWrite writes the values of the item Parameters (on MQTT, items sharing a topic are published in
+            one combined JSON message); an MQTT write without items publishes the payload parameter as JSON on
+            DeviceRequest.query. DrtStateChange, DrtCyclic and DrtEvent subscribe (the
             PLC4X subscription types; DrtSubscribe is the default of the protocol): on OPC UA as monitored items, a
             DrtCyclic one sampled every pollingInterval; on MQTT as broker subscriptions, with no DrtCyclic. Polled and
             received values are stored through the sample queue. DrtUnsubscribe stops the subscription or polling of

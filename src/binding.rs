@@ -150,15 +150,39 @@ fn connection(r: &EntityValue, c: Option<&EntityValue>, device_id: &str) -> Resu
     } else {
         BTreeMap::new()
     };
-    let endpoint = text(r, "brokerUri")
-        .or_else(|| c.and_then(|c| text(c, "transportConfig")))
-        .ok_or_else(|| Error::new("No field connection endpoint"))?;
+    let router = text(r, "routerEnumId");
+    let is_broker = matches!(
+        router.as_deref(),
+        Some("DrrBroker" | "DrrMQTTBroker" | "DrrAMQPBroker" | "DrrSTOMPBroker" | "DrrKafka")
+    ) || c.is_none();
+
+    let endpoint = if let Some(broker_uri) = text(r, "brokerUri").filter(|s| !s.trim().is_empty()) {
+        broker_uri
+    } else if !is_broker && c.is_some() {
+        c.and_then(|c| text(c, "transportConfig"))
+            .ok_or_else(|| Error::new("No field connection endpoint"))?
+    } else {
+        let default_broker = moqui_lib::env::get_prop_or_env("device_mqtt_broker_uri");
+        if !default_broker.trim().is_empty() {
+            default_broker
+        } else {
+            let default_general = moqui_lib::env::get_prop_or_env("device_broker_uri");
+            if !default_general.trim().is_empty() {
+                default_general
+            } else if let Some(cfg) = c.and_then(|c| text(c, "transportConfig")) {
+                cfg
+            } else {
+                return Err(Error::new("No field connection endpoint"));
+            }
+        }
+    };
     let driver = c.and_then(|c| text(c, "driverEnumId"));
     let protocol = if endpoint.starts_with("paho-mqtt5:")
         || endpoint.starts_with("paho:")
         || endpoint.starts_with("mqtt://")
         || endpoint.starts_with("mqtts://")
         || driver.as_deref() == Some("DcdMqtt")
+        || router.as_deref() == Some("DrrMQTTBroker")
     {
         Protocol::Mqtt
     } else if endpoint.starts_with("milo-client:")
@@ -631,7 +655,19 @@ fn optional_text(value: Option<&String>) -> Value {
 
 fn sample_to_value(s: &Sample) -> Result<Value, Error> {
     let sequence_num = match &s.value {
-        FieldValue::Record(event) => event.get("sequenceNum").map(to_value).unwrap_or(Value::Null),
+        FieldValue::Record(event) => event
+            .get("sequenceNum")
+            .or_else(|| {
+                event.get("sequence").filter(|v| match v {
+                    FieldValue::Signed(n) => *n > 0,
+                    FieldValue::Unsigned(n) => *n > 0,
+                    FieldValue::Decimal(n) => *n > Decimal::ZERO,
+                    FieldValue::Float(n) => *n > 0.0,
+                    _ => true,
+                })
+            })
+            .map(to_value)
+            .unwrap_or(Value::Null),
         _ => Value::Null,
     };
     let log_value_kind = match s.log_value_kind {
