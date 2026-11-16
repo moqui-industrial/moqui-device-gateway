@@ -37,6 +37,7 @@ use ethercrab::{
     std::{ethercat_now, tx_rx_task},
     MainDevice, MainDeviceConfig, PduStorage, Timeouts,
 };
+use std::time::Instant;
 #[cfg(unix)]
 use std::{
     collections::HashMap,
@@ -46,7 +47,6 @@ use std::{
     },
     time::Duration,
 };
-use std::time::Instant;
 #[cfg(unix)]
 use tokio::sync::{watch, Mutex};
 

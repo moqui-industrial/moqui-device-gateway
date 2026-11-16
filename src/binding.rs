@@ -135,12 +135,7 @@ fn parse_options(raw: &str) -> Result<BTreeMap<String, String>, Error> {
     Ok(result)
 }
 
-fn is_enum_in_hierarchy(
-    ec: &ExecutionContext,
-    ef: &EntityFacade,
-    enum_id: Option<&str>,
-    parent_enum_id: &str,
-) -> bool {
+fn is_enum_in_hierarchy(ec: &ExecutionContext, ef: &EntityFacade, enum_id: Option<&str>, parent_enum_id: &str) -> bool {
     let Some(id) = enum_id else {
         return false;
     };
@@ -167,7 +162,13 @@ fn is_enum_in_hierarchy(
         current = ef
             .find("moqui.basic.Enumeration")
             .ok()
-            .and_then(|f| f.eq("enumId", Value::string(curr_id)).use_cache(true).one().ok().flatten())
+            .and_then(|f| {
+                f.eq("enumId", Value::string(curr_id))
+                    .use_cache(true)
+                    .one()
+                    .ok()
+                    .flatten()
+            })
             .and_then(|e| text(&e, "parentEnumId"));
     }
     false

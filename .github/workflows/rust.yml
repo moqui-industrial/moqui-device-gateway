@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: moqui/mr-moqui
-          ref: ed07b11228cab9296b4793c4b21f3e0fb036bed2
+          ref: 72ecbaac52889407512186a3bb20ef8c9baf83e5
           path: mr-moqui
       - uses: actions/checkout@v4
         with:
