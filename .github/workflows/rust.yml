@@ -13,19 +13,19 @@ jobs:
           path: mr-moqui
       - uses: actions/checkout@v4
         with:
-          path: mr-moqui/runtime/component/moqui-device-gateway
+          path: mr-moqui/runtime/components/addon/moqui-device-gateway
       - uses: actions/checkout@v4
         with:
           repository: moqui/moqui-device
           ref: mr-moqui
-          path: mr-moqui/runtime/component/moqui-device
+          path: mr-moqui/runtime/components/addon/moqui-device
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: Format
-        working-directory: mr-moqui/runtime/component/moqui-device-gateway
+        working-directory: mr-moqui/runtime/components/addon/moqui-device-gateway
         run: cargo fmt --package moqui-device-gateway -- --check
       - name: Test
-        run: cargo test --locked --manifest-path mr-moqui/runtime/component/moqui-device-gateway/Cargo.toml
+        run: cargo test --locked --manifest-path mr-moqui/runtime/components/addon/moqui-device-gateway/Cargo.toml
       - name: Lint
-        run: cargo clippy --locked --manifest-path mr-moqui/runtime/component/moqui-device-gateway/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --locked --manifest-path mr-moqui/runtime/components/addon/moqui-device-gateway/Cargo.toml --all-targets -- -D warnings
