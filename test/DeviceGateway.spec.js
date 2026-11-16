@@ -5,9 +5,8 @@
 // The requests are those of moqui-device's DeviceTestData.xml and HVAC demo data. The services common to every
 // driver (recipe export, content transfer, sample store, gateway scope) are tested by moqui-device's
 // DeviceRequests.spec.js. Optional features:
-//   gateway_mqtt_test=1: an MQTT 5 broker on 127.0.0.1:1883 (or gateway_mqtt_test_broker) with user artemis/artemis;
-//     with gateway_mqtt_test_broker the seeded requests are moved to it and given that user, and
-//     device_mqtt_broker_uri names it for the requests without a broker (HVAC_DEMO_PlcLogSubscribe);
+//   gateway_mqtt_test=1: the MQTT 5 broker of device_broker_uri, device_broker_username and device_broker_password,
+//     which every broker request uses;
 //   device_gateway_device_id=HVAC_DEMO_GATEWAY (or none): the HVAC demo, whose devices are outside GW_EDGE_01;
 //   device_gateway_error_notification_seconds=0 with gateway_mqtt_test: the persistence failure notification;
 //   device_gateway_device_id=GW_EDGE_01: requests outside the gateway scope are refused;
@@ -16,30 +15,21 @@
 //     (scripts/modbus_peer.py);
 //   gateway_eip_endpoint=logix://host:port: an EtherNet/IP Logix server with a DINT tag Speed (cpppo).
 spec({
-    setup() {
-        ec.artifactExecution.disableAuthz();
-        // the seeded requests name the broker on localhost:1883, some without a user; a test broker elsewhere takes
-        // their place, with the test user
-        const broker = System.getProperty("gateway_mqtt_test_broker");
-        if (broker) for (const row of ec.entity.find("moqui.device.DeviceRequest").list()) {
-            if (row.brokerUri?.includes("tcp://localhost:1883")) {
-                row.brokerUri = row.brokerUri.replace("tcp://localhost:1883", broker);
-                if (row.brokerUri.startsWith("paho") && !row.brokerUri.includes("userName="))
-                    row.brokerUri += "&userName=artemis&password=artemis";
-                row.update();
-            }
-        }
-    },
+    setup() { ec.artifactExecution.disableAuthz(); },
     cleanup() { ec.artifactExecution.enableAuthz(); },
 });
 
-const mqttBroker = System.getProperty("gateway_mqtt_test_broker") || "tcp://localhost:1883";
-const mqttUri = `paho-mqtt5:?brokerUrl=${mqttBroker}&userName=artemis&password=artemis`;
 const gatewayService = "moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest";
 const plcLogService = "moqui.device.gateway.DeviceGatewayServices.run#PlcLogRequest";
 const storeRequest = (fields) => call("store#moqui.device.DeviceRequest",
     Object.assign({timeout: 5000, runServiceName: gatewayService}, fields));
 const storeItem = (fields) => call("store#moqui.device.DeviceRequestItem", fields);
+// a DeviceConnection of VIRTUAL_PLC_01: the endpoint, driver and credentials of a direct request
+const storeConnection = (connectionName, transportConfig, driverEnumId, fields) =>
+    call("store#moqui.device.DeviceConnection", Object.assign({connectionName, deviceId: "VIRTUAL_PLC_01",
+        connectionTypeEnumId: "DctDirectConnection", purposeEnumId: "DcpOperations", transportConfig, driverEnumId}, fields));
+const deleteConnections = (...names) => names.forEach(connectionName =>
+    ec.entity.find("moqui.device.DeviceConnection").condition("connectionName", connectionName).deleteAll());
 const run = (requestName, fields) => call("moqui.device.DeviceServices.run#DeviceRequest", Object.assign({requestName}, fields));
 const deleteRequests = (...names) => names.forEach(requestName => {
     ec.entity.find("moqui.device.DeviceRequestItem").condition("requestName", requestName).deleteAll();
@@ -48,7 +38,7 @@ const deleteRequests = (...names) => names.forEach(requestName => {
 // publish one JSON message on a topic, through an MQTT write request without items
 const publish = (topic, payload) => {
     storeRequest({requestName: "GatewayTestPublish", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtWrite",
-        routerEnumId: "DrrMQTTBroker", brokerUri: mqttUri, query: topic});
+        routerEnumId: "DrrMQTTBroker", query: topic});
     return run("GatewayTestPublish", {payload});
 };
 // wait for a condition the persistence worker makes true, at most a few seconds
@@ -111,7 +101,7 @@ feature("a read, a polling and a cyclic subscription of an MQTT topic are refuse
         for (const [requestName, requestTypeEnumId, pollingInterval] of
             [["GatewayMqttRead", "DrtRead", null], ["GatewayMqttPoll", "DrtRead", 100], ["GatewayMqttCyclic", "DrtCyclic", 100]]) {
             storeRequest({requestName, deviceId: "VIRTUAL_PLC_01", requestTypeEnumId, pollingInterval,
-                routerEnumId: "DrrDirect", brokerUri: "mqtt://127.0.0.1:9"});
+                routerEnumId: "DrrMQTTBroker"});
             storeItem({requestName, requestItemName: "value", query: "plc/value", parameterId: "TestPlcFeedbackParam",
                 itemTypeEnumId: "DritUInt"});
             let out = null;
@@ -132,8 +122,9 @@ feature("a read, a polling and a cyclic subscription of an MQTT topic are refuse
 feature("an endpoint of no driver is refused", {
     allowMessageErrors: true,
     when() {
+        storeConnection("GatewayHttpConn", "http://127.0.0.1:8081/api", "DcdMtConnect");
         storeRequest({requestName: "GatewayHttpRead", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtRead",
-            routerEnumId: "DrrDirect", brokerUri: "http://127.0.0.1:8081/api", query: "x"});
+            routerEnumId: "DrrDirect", connectionName: "GatewayHttpConn", query: "x"});
         const failure = failureOf(() => run("GatewayHttpRead"));
         ec.message.clearErrors();
         return {failure};
@@ -141,7 +132,37 @@ feature("an endpoint of no driver is refused", {
     then(out) {
         out.failure.includes("Unsupported fieldbus protocol");
     },
-    cleanup() { deleteRequests("GatewayHttpRead"); },
+    cleanup() {
+        deleteRequests("GatewayHttpRead");
+        deleteConnections("GatewayHttpConn");
+    },
+});
+
+feature("a direct request needs a DeviceConnection, whose credentials are not in its options", {
+    allowMessageErrors: true,
+    when() {
+        const failures = {};
+        const attempt = (name, fields) => {
+            storeRequest(Object.assign({requestName: "GatewayCredentialRead", deviceId: "VIRTUAL_PLC_01",
+                requestTypeEnumId: "DrtRead", routerEnumId: "DrrDirect"}, fields));
+            storeItem({requestName: "GatewayCredentialRead", requestItemName: "value", query: "holding-register:0:UINT",
+                parameterId: "TestPlcFeedbackParam", itemTypeEnumId: "DritUInt"});
+            failures[name] = failureOf(() => run("GatewayCredentialRead"));
+            ec.message.clearErrors();
+        };
+        attempt("noConnection", {});
+        storeConnection("GatewayCredentialConn", "modbus-tcp://127.0.0.1:9", "DcdModbusTCP", {options: "password=secret"});
+        attempt("clearPassword", {connectionName: "GatewayCredentialConn"});
+        return failures;
+    },
+    then(out) {
+        out.noConnection.includes("needs a DeviceConnection");
+        out.clearPassword.includes("DeviceConnection.username and password");
+    },
+    cleanup() {
+        deleteRequests("GatewayCredentialRead");
+        deleteConnections("GatewayCredentialConn");
+    },
 });
 
 feature("with a configured gateway a request outside its scope is refused", {
@@ -193,7 +214,7 @@ feature("a trajectory export publishes one MQTT message", {
         const sample = ec.entity.find("moqui.math.ApproximatedFunctionSample").list()[0];
         storeRequest({requestName: "GatewayTestTrajectory", deviceId: "VIRTUAL_PLC_01",
             requestTypeEnumId: "DrtWrite", routerEnumId: "DrrMQTTBroker",
-            brokerUri: mqttUri, query: "moqui/test/trajectory"});
+            query: "moqui/test/trajectory"});
         return call("moqui.device.DeviceServices.export#Trajectory",
             {approximatedFunctionId: sample.approximatedFunctionId, requestName: "GatewayTestTrajectory"});
     },
@@ -236,46 +257,43 @@ feature("an MQTT subscription stores the values it receives", {
     cleanup() { deleteRequests("GatewayTestPublish"); },
 });
 
-feature("MQTT 3.1.1 and 5 deliver values with QoS 0, 1 and 2", {
+feature("MQTT 5 delivers values with the QoS 0, 1 and 2 of each request", {
     ignore: !System.getProperty("gateway_mqtt_test"),
     when() {
         const delivered = [];
-        for (const scheme of ["paho", "paho-mqtt5"]) {
-            for (const qos of [0, 1, 2]) {
-                const topic = `mqtt-read-device-request/native/${scheme}/${qos}`;
-                const common = {deviceId: "VIRTUAL_PLC_01", routerEnumId: "DrrMQTTBroker", query: topic,
-                    brokerUri: `${scheme}:?brokerUrl=${mqttBroker}&userName=artemis&password=artemis&qos=${qos}`};
-                storeRequest({...common, requestName: "GatewayVersionSubscribe", requestTypeEnumId: "DrtSubscribe"});
-                storeItem({requestName: "GatewayVersionSubscribe", requestItemName: "value",
-                    parameterId: "TestPlcFeedbackParam", query: topic, itemTypeEnumId: "DritReal"});
-                storeRequest({...common, requestName: "GatewayVersionPublish", requestTypeEnumId: "DrtWrite"});
-                storeRequest({...common, requestName: "GatewayVersionStop", requestTypeEnumId: "DrtUnsubscribe",
-                    parentRequestName: "GatewayVersionSubscribe"});
-                run("GatewayVersionSubscribe");
-                const expected = (scheme === "paho" ? 300 : 500) + qos;
-                try {
-                    const written = run("GatewayVersionPublish", {payload: {value: expected}});
-                    delivered.push(written.status === "completed"
-                        && waitFor(() => parameterNumber("TestPlcFeedbackParam") === expected));
-                } finally {
-                    run("GatewayVersionStop");
-                }
+        for (const qos of [0, 1, 2]) {
+            const topic = `mqtt-read-device-request/native/qos/${qos}`;
+            const common = {deviceId: "VIRTUAL_PLC_01", routerEnumId: "DrrMQTTBroker", query: topic, qos};
+            storeRequest({...common, requestName: "GatewayQosSubscribe", requestTypeEnumId: "DrtSubscribe"});
+            storeItem({requestName: "GatewayQosSubscribe", requestItemName: "value",
+                parameterId: "TestPlcFeedbackParam", query: topic, itemTypeEnumId: "DritReal"});
+            storeRequest({...common, requestName: "GatewayQosPublish", requestTypeEnumId: "DrtWrite"});
+            storeRequest({...common, requestName: "GatewayQosStop", requestTypeEnumId: "DrtUnsubscribe",
+                parentRequestName: "GatewayQosSubscribe"});
+            run("GatewayQosSubscribe");
+            const expected = 500 + qos;
+            try {
+                const written = run("GatewayQosPublish", {payload: {value: expected}});
+                delivered.push(written.status === "completed"
+                    && waitFor(() => parameterNumber("TestPlcFeedbackParam") === expected));
+            } finally {
+                run("GatewayQosStop");
             }
         }
         return {delivered};
     },
     then(out) {
-        out.delivered.length == 6;
+        out.delivered.length == 3;
         out.delivered.every(value => value === true);
     },
-    cleanup() { deleteRequests("GatewayVersionStop", "GatewayVersionSubscribe", "GatewayVersionPublish"); },
+    cleanup() { deleteRequests("GatewayQosStop", "GatewayQosSubscribe", "GatewayQosPublish"); },
 });
 
 feature("an unreadable MQTT item does not drop its valid sibling or stop subsequent collecting", {
     ignore: !System.getProperty("gateway_mqtt_test") || System.getProperty("device_gateway_error_notification_seconds") !== "0",
     when() {
         const topic = "mqtt-read-device-request/native/partial-collection";
-        const common = {deviceId: "VIRTUAL_PLC_01", brokerUri: mqttUri, routerEnumId: "DrrMQTTBroker", query: topic};
+        const common = {deviceId: "VIRTUAL_PLC_01", routerEnumId: "DrrMQTTBroker", query: topic};
         storeRequest({...common, requestName: "GatewayPartialRead", requestTypeEnumId: "DrtSubscribe"});
         storeRequest({...common, requestName: "GatewayPartialStop", requestTypeEnumId: "DrtUnsubscribe",
             parentRequestName: "GatewayPartialRead"});
@@ -307,7 +325,7 @@ feature("a burst of ten MQTT messages is logged ten times", {
     ignore: !System.getProperty("gateway_mqtt_test"),
     when() {
         storeRequest({requestName: "GatewayTestBurst", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
-            purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", brokerUri: mqttUri, query: "moqui/test/burst"});
+            purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", query: "moqui/test/burst"});
         storeItem({requestName: "GatewayTestBurst", requestItemName: "value", parameterId: "TestPlcFeedbackParam",
             sequenceNum: 10, query: "moqui/test/burst", itemTypeEnumId: "DritReal"});
         storeRequest({requestName: "GatewayTestBurstStop", parentRequestName: "GatewayTestBurst", deviceId: "VIRTUAL_PLC_01",
@@ -340,7 +358,7 @@ feature("the HVAC demo publishes the live parameters and stores the PLC log acro
         const subscription = run("HVAC_DEMO_PlcLogSubscribe");
         // what the CODESYS LogDispatcher publishes, sent here by an MQTT write without items
         storeRequest({requestName: "GatewayTestPlcLogPublish", deviceId: "HVAC_DEMO_PLC",
-            requestTypeEnumId: "DrtWrite", routerEnumId: "DrrMQTTBroker", brokerUri: mqttUri, query: "moqui-plc"});
+            requestTypeEnumId: "DrtWrite", routerEnumId: "DrrMQTTBroker", query: "moqui-plc"});
         const paramCount = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "HvacTempSetpoint").useCache(false).count();
         const pumpCount = () => ec.entity.find("moqui.device.DeviceLog").condition("deviceId", "HVAC_COLD_GLYCOL_PUMP").useCache(false).count();
         const beforeParam = paramCount();
@@ -388,7 +406,7 @@ feature("PLC log events go to ParameterLog or DeviceLog, and a malformed batch d
     when() {
         storeRequest({requestName: "GatewayTestPlcLog", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
             purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService,
-            brokerUri: mqttUri, query: "moqui/test/plc-log"});
+            query: "moqui/test/plc-log"});
         storeRequest({requestName: "GatewayTestPlcLogStop", parentRequestName: "GatewayTestPlcLog", deviceId: "VIRTUAL_PLC_01",
             requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService});
         const parameterLogs = () => ec.entity.find("moqui.math.ParameterLog").condition("parameterId", "TestPlcFeedbackParam").useCache(false).count();
@@ -435,7 +453,7 @@ feature("persistence failures and the recovery are notified to the user", {
     when() {
         storeRequest({requestName: "GatewayTestFailing", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
             purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService,
-            brokerUri: mqttUri, query: "moqui/test/failing"});
+            query: "moqui/test/failing"});
         storeRequest({requestName: "GatewayTestFailingStop", parentRequestName: "GatewayTestFailing", deviceId: "VIRTUAL_PLC_01",
             requestTypeEnumId: "DrtUnsubscribe", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService});
         const failedNotices = () => notificationCount("DeviceInboundFailed");
@@ -466,7 +484,7 @@ feature("startup restores eligible subscriptions without resurrecting explicitly
         // earlier features explicitly unsubscribed the seeded MQTT request: the restoration must respect that stop
         const topic = "mqtt-read-device-request/native/startup-fresh";
         storeRequest({requestName: "GatewayStartupFresh", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
-            routerEnumId: "DrrMQTTBroker", brokerUri: mqttUri, query: topic});
+            routerEnumId: "DrrMQTTBroker", query: topic});
         storeItem({requestName: "GatewayStartupFresh", parameterId: "TestPlcFeedbackParam", requestItemName: "value",
             query: topic, itemTypeEnumId: "DritReal"});
         storeRequest({requestName: "GatewayStartupFreshStop", parentRequestName: "GatewayStartupFresh", deviceId: "VIRTUAL_PLC_01",
@@ -560,7 +578,8 @@ feature("an OPC UA monitored item stores the live node value", {
 
 // stores the four requests of a write, read and polling round trip on one address, and runs it
 const roundTrip = (prefix, endpoint, item, timeout, first, second) => {
-    const common = {deviceId: "VIRTUAL_PLC_01", routerEnumId: "DrrDirect", brokerUri: endpoint, timeout};
+    storeConnection(prefix + "Conn", endpoint, endpoint.startsWith("logix:") ? "DcdLogixCIPEIP" : "DcdModbusTCP");
+    const common = {deviceId: "VIRTUAL_PLC_01", routerEnumId: "DrrDirect", connectionName: prefix + "Conn", timeout};
     storeRequest({...common, requestName: prefix + "Write", requestTypeEnumId: "DrtWrite"});
     storeRequest({...common, requestName: prefix + "Read", requestTypeEnumId: "DrtRead"});
     storeRequest({...common, requestName: prefix + "Poll", requestTypeEnumId: "DrtRead", pollingInterval: 50});
@@ -598,6 +617,7 @@ feature("Modbus TCP write, read and cyclic acquisition persist through the commo
     },
     cleanup() {
         deleteRequests("GatewayModbusStop", "GatewayModbusPoll", "GatewayModbusRead", "GatewayModbusWrite");
+        deleteConnections("GatewayModbusConn");
         resetReference();
     },
 });
@@ -617,6 +637,7 @@ feature("EtherNet/IP write, read and polling of a Logix tag persist through the 
     },
     cleanup() {
         deleteRequests("GatewayEipStop", "GatewayEipPoll", "GatewayEipRead", "GatewayEipWrite");
+        deleteConnections("GatewayEipConn");
         resetReference();
     },
 });

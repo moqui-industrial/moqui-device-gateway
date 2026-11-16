@@ -111,12 +111,29 @@ setpoint by the target device; QoS 0 only confirms local transmission.
 
 ## Connections
 
+A direct request (`DrrDirect`) runs on its `DeviceConnection`: the endpoint is
+its `transportConfig`, the driver its `driverEnumId`, and the user the device
+knows is its `username` and `password`, stored encrypted (`entity_ds_crypt_pass`):
+the user installed on the PLC and replicated in Moqui. The options `usernameEnv`
+and `passwordEnv` name an environment variable or property instead. A `username`
+or `password` in the options or the endpoint is refused. A broker request
+(`DrrBroker` or a child) has no connection: see MQTT below.
+
 * Modbus: endpoint `modbus-tcp://host:502` (or driver `DcdModbusTCP` with
   `transportConfig=host:502`), options `unit-identifier=1` and optionally
   `byte-order=big-endian&word-order=big-endian`. Addresses use PLC4J-style
   zero-based offsets, e.g. `holding-register:2:UINT` or
   `holding-register:10:REAL`. No 40001 adjustment is inferred.
-* MQTT: endpoint configured via `DeviceRequest.brokerUri`, or defaulting to `device_mqtt_broker_uri` from `MoquiConf.xml` (e.g. `paho-mqtt5:?brokerUrl=tcp://host:1883&qos=1` or `mqtt://host:1883`). Message brokers do not use `DeviceConnection` (reserved for point-to-point fieldbus connections). Multi-item writes sharing the same topic are grouped into a single JSON dictionary message. The topic is the item address. Options include `protocol-version=3|5`, `qos=0|1|2`, `retain`,
+* MQTT: a broker request (`routerEnumId` `DrrBroker` or a child, such as
+  `DrrMQTTBroker`) uses the one broker of the instance: the properties
+  `device_broker_uri` (e.g. `paho-mqtt5:?brokerUrl=tcp://host:1883&qos=1` or
+  `mqtt://host:1883`), `device_broker_username` and `device_broker_password`
+  (put the password in `runtime/.env`). A user in the URI is refused. The
+  `qos` and `retained` of the `DeviceRequest` override those of the URI.
+  Message brokers do not use `DeviceConnection` (reserved for point-to-point
+  fieldbus connections). Multi-item writes sharing the same topic are grouped
+  into a single JSON dictionary message. The topic is the item address. Options
+  include `protocol-version=3|5`, `qos=0|1|2`, `retain`,
   `clean-start`, `session-expiry-seconds`, `automatic-reconnect`,
   `max-reconnect-delay-ms`, `receive-maximum` and `client-id`. Subscriptions
   have stable client IDs; finite calls use distinct IDs. TLS supports system
@@ -182,9 +199,13 @@ the library pauses reading instead, and a pause longer than the keepalive makes
 the broker close the connection and deliver the unacknowledged messages again.
 Prefer MQTT 5 for durable subscriptions.
 
-Polling and OPC UA samples have no broker behind them: a sink that is full
-rejects and logs them. The sample worker keeps and retries the batches it has
-taken while the database does not answer.
+Polling and OPC UA samples have no broker behind them: when the queue is full
+(`device_gateway_queue_capacity` batches, default 1024) they are discarded. The
+first discard of a request is logged at once, and the worker notifies how many
+values were discarded (`DeviceInboundFailed`, event `queueFull`), at most once
+every `device_gateway_error_notification_seconds`. Size the queue for the polling
+rate times the longest database stall to bridge. The sample worker keeps and
+retries the batches it has taken while the database does not answer.
 
 A store failure and its recovery are Moqui notifications
 (`DeviceInboundFailed`, `DeviceInboundRecovered`) and log entries. A notification
@@ -255,7 +276,7 @@ needs a segment on a raw interface, which no runner provides: its tests cover th
 addresses, the process data image and an interface that cannot be opened, not
 the cycle on real SubDevices.
 
-`scripts/run-acceptance.py` (Linux, opt-in) runs `acceptance/GatewayRecovery.spec.js`:
+`scripts/run-acceptance.py` (Linux, opt-in) runs `test/acceptance/GatewayRecovery.spec.js`:
 broker stop and start, a cut of the gateway-broker link, a PostgreSQL crash, a
 paused database under a 2200-message burst, a 1000-message persistence run, and
 the restoration of subscriptions in a second host process, with messages

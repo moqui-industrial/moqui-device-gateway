@@ -24,13 +24,14 @@ use moqui_core::{
 };
 use moqui_lib::object::Value;
 use std::{
+    collections::HashMap,
     future::Future,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, Weak,
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -63,7 +64,7 @@ impl Gateway {
     }
 }
 
-/// Batches waiting for the persistence worker.
+/// Batches waiting for the persistence worker, unless `device_gateway_queue_capacity` sets another number.
 const QUEUE_CAPACITY: usize = 1024;
 /// What the worker stores in one go: the batches already waiting, up to these limits.
 const MAX_JOBS: usize = 512;
@@ -76,8 +77,38 @@ pub(crate) struct Job {
     done: Option<oneshot::Sender<()>>,
 }
 
+/// The samples a full queue discarded since the last notice, by request: the device and the number of samples.
+type Discarded = Mutex<HashMap<String, (String, u64)>>;
+
 pub(crate) struct QueueSink {
     sender: mpsc::Sender<Job>,
+    discarded: Arc<Discarded>,
+    capacity: usize,
+}
+
+impl QueueSink {
+    /// Counts what a full queue discarded, for the worker's notice, and logs the first discard of each request at once.
+    fn discard(&self, batch: &SampleBatch) {
+        let device = batch
+            .request
+            .as_ref()
+            .map(|r| r.device_id.clone())
+            .or_else(|| batch.samples.first().map(|s| s.device_id.clone()))
+            .unwrap_or_default();
+        let samples = batch.samples.len().max(1) as u64;
+        let Ok(mut discarded) = self.discarded.lock() else {
+            return;
+        };
+        let entry = discarded.entry(batch.request_name.clone()).or_insert_with(|| {
+            tracing::error!(
+                request = %batch.request_name,
+                capacity = self.capacity,
+                "Device gateway persistence queue is full: samples are discarded; see device_gateway_queue_capacity"
+            );
+            (device, 0)
+        });
+        entry.1 += samples;
+    }
 }
 
 #[async_trait::async_trait]
@@ -85,10 +116,13 @@ impl SampleSink for QueueSink {
     /// Polling and OPC UA samples: nothing upstream keeps them, so a full queue rejects them.
     fn emit(&self, batch: SampleBatch) -> Result<(), DeviceGatewayError> {
         self.sender.try_send(Job { batch, done: None }).map_err(|e| match e {
-            mpsc::error::TrySendError::Full(_) => DeviceGatewayError::new(
-                ErrorKind::Busy,
-                "Device gateway persistence queue is full; sample was not saved",
-            ),
+            mpsc::error::TrySendError::Full(job) => {
+                self.discard(&job.batch);
+                DeviceGatewayError::new(
+                    ErrorKind::Busy,
+                    "Device gateway persistence queue is full; sample was not saved",
+                )
+            }
             mpsc::error::TrySendError::Closed(_) => {
                 DeviceGatewayError::new(ErrorKind::Closed, "Device gateway persistence worker is closed")
             }
@@ -150,19 +184,26 @@ impl ToolFactory for DeviceGatewayToolFactory {
             .thread_name("device-gateway-io")
             .build()
             .map_err(|e| Error::new(e.to_string()))?;
-        let (sender, receiver) = mpsc::channel::<Job>(QUEUE_CAPACITY);
+        let capacity = queue_capacity();
+        let (sender, receiver) = mpsc::channel::<Job>(capacity);
+        let discarded = Arc::new(Discarded::default());
+        let reported = discarded.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         let factory = Arc::downgrade(factory);
         let handle = runtime.handle().clone();
         let worker = std::thread::Builder::new()
             .name("device-gateway-store".into())
-            .spawn(move || persist_loop(factory, handle, receiver, stopped))
+            .spawn(move || persist_loop(factory, handle, receiver, stopped, reported, capacity))
             .map_err(|e| Error::new(e.to_string()))?;
         *gateway = Some(Arc::new(Gateway {
             runtime,
             facade: Arc::new(DeviceGatewayFacade::new()),
-            sink: Arc::new(QueueSink { sender }),
+            sink: Arc::new(QueueSink {
+                sender,
+                discarded,
+                capacity,
+            }),
             stop,
             worker: Mutex::new(Some(worker)),
         }));
@@ -189,17 +230,68 @@ impl ToolFactory for DeviceGatewayToolFactory {
     }
 }
 
+/// `device_gateway_queue_capacity`, in batches: a number above zero, else the default.
+fn queue_capacity() -> usize {
+    let value = moqui_lib::env::get_prop_or_env("device_gateway_queue_capacity");
+    if value.trim().is_empty() {
+        return QUEUE_CAPACITY;
+    }
+    match value.trim().parse::<usize>() {
+        Ok(capacity) if capacity > 0 => capacity,
+        _ => {
+            tracing::error!(value = %value, default = QUEUE_CAPACITY, "Invalid device_gateway_queue_capacity; using the default");
+            QUEUE_CAPACITY
+        }
+    }
+}
+
 /// Persistence failure notices: `device_gateway_error_notification=false` turns them off, and
 /// `device_gateway_error_notification_seconds` (default 60) is how long the failures of a request last before the
-/// user is told.
-fn inbound_errors() -> Option<crate::notifier::InboundErrors> {
+/// user is told, and the shortest time between two notices of discarded samples.
+fn notification_seconds() -> Option<Duration> {
     if moqui_lib::env::get_prop_or_env("device_gateway_error_notification") == "false" {
         return None;
     }
     let seconds = moqui_lib::env::get_prop_or_env("device_gateway_error_notification_seconds")
         .parse::<u64>()
         .unwrap_or(60);
-    Some(crate::notifier::InboundErrors::new(Duration::from_secs(seconds)))
+    Some(Duration::from_secs(seconds))
+}
+
+/// Tells the users what a full queue discarded since the last notice, at most once every `interval`. A notice needs the
+/// database: during an outage the log has the discards, and the notice follows once the worker stores again.
+struct DiscardNotices {
+    discarded: Arc<Discarded>,
+    capacity: usize,
+    interval: Option<Duration>,
+    last: Option<Instant>,
+}
+
+impl DiscardNotices {
+    fn send(&mut self, factory: &Weak<ExecutionContextFactory>) {
+        let Some(interval) = self.interval else {
+            return;
+        };
+        if self.last.is_some_and(|last| last.elapsed() < interval) {
+            return;
+        }
+        let taken = match self.discarded.lock() {
+            Ok(mut discarded) if !discarded.is_empty() => std::mem::take(&mut *discarded),
+            _ => return,
+        };
+        self.last = Some(Instant::now());
+        let Some(factory) = factory.upgrade() else {
+            return;
+        };
+        let ec = factory.new_context();
+        let _entered = ec.enter();
+        let _auth = ec.disable_authz();
+        for (request, (device, samples)) in taken {
+            if let Err(error) = crate::binding::notify_discarded(&ec, &request, &device, samples, self.capacity) {
+                tracing::error!(request = %request, error = %error, "Discarded samples notice not sent");
+            }
+        }
+    }
 }
 
 /// The persistence worker: takes the batches waiting, stores them a request at a time, and while the database does not
@@ -209,9 +301,19 @@ fn persist_loop(
     handle: tokio::runtime::Handle,
     mut receiver: mpsc::Receiver<Job>,
     stop: Arc<AtomicBool>,
+    discarded: Arc<Discarded>,
+    capacity: usize,
 ) {
-    let mut errors = inbound_errors();
+    let interval = notification_seconds();
+    let mut errors = interval.map(crate::notifier::InboundErrors::new);
+    let mut notices = DiscardNotices {
+        discarded,
+        capacity,
+        interval,
+        last: None,
+    };
     loop {
+        notices.send(&factory);
         let first =
             match handle.block_on(async { tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await }) {
                 Ok(Some(job)) => job,
@@ -340,5 +442,47 @@ fn store_group(
             std::thread::sleep(Duration::from_millis(100));
         }
         delay = (delay * 2).min(MAX_RETRY_DELAY);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn batch(request: &str, values: usize) -> SampleBatch {
+        SampleBatch {
+            request_name: request.into(),
+            errors: Vec::new(),
+            logging: false,
+            request: None,
+            samples: (0..values)
+                .map(|_| Sample {
+                    device_id: "PLC_1".into(),
+                    log_value_kind: None,
+                    parameter_id: Some("P".into()),
+                    value: FieldValue::Bool(true),
+                    source_time: None,
+                    received_time: std::time::SystemTime::now(),
+                    quality: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_full_queue_counts_the_discarded_samples_by_request() {
+        let (sender, _receiver) = mpsc::channel::<Job>(1);
+        let sink = QueueSink {
+            sender,
+            discarded: Arc::new(Discarded::default()),
+            capacity: 1,
+        };
+        assert!(sink.emit(batch("A", 3)).is_ok());
+        assert_eq!(sink.emit(batch("A", 2)).unwrap_err().kind, ErrorKind::Busy);
+        assert!(sink.emit(batch("A", 4)).is_err());
+        assert!(sink.emit(batch("B", 1)).is_err());
+        let discarded = sink.discarded.lock().unwrap();
+        assert_eq!(discarded.get("A"), Some(&("PLC_1".to_string(), 6)));
+        assert_eq!(discarded.get("B"), Some(&("PLC_1".to_string(), 1)));
     }
 }

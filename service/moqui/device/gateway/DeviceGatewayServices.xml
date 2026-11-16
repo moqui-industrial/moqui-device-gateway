@@ -23,9 +23,11 @@ along with this software (see the LICENSE.md file). If not, see
             authenticate="false" transaction="ignore">
         <description>
             Runs a DeviceRequest on the driver of its connection: DeviceConnection.driverEnumId (DcdModbusTCP, DcdOpcUa,
-            DcdMqtt, DcdLogixCIPEIP or DcdEthernetIP, DcdEtherCAT), else the scheme of DeviceRequest.brokerUri or
-            DeviceConnection.transportConfig (modbus-tcp://, opc.tcp://, mqtt://, mqtts://, paho-mqtt5:?brokerUrl=...,
-            logix://, eip://, ethercat://). Set it as DeviceRequest.runServiceName, as
+            DcdMqtt, DcdLogixCIPEIP or DcdEthernetIP, DcdEtherCAT), else the scheme of DeviceConnection.transportConfig
+            (modbus-tcp://, opc.tcp://, mqtt://, mqtts://, logix://, eip://, ethercat://), with the credentials of the
+            connection (username and password, or the options usernameEnv and passwordEnv). A broker request
+            (routerEnumId DrrBroker or a child) has no connection: it goes to the broker of device_broker_uri, with
+            device_broker_username and device_broker_password. Set it as DeviceRequest.runServiceName, as
             moqui.plc4j.Plc4jServices.run#Plc4jRequest was; moqui.device.DeviceServices.run#DeviceRequest calls it.
 
             DrtRead reads the items once and stores the values (DeviceAcquisitionServices.store#Samples); with a

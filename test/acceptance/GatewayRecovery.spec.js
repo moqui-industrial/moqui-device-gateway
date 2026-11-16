@@ -84,7 +84,6 @@ spec({
             deviceId: "VIRTUAL_PLC_01",
             routerEnumId: "DrrMQTTBroker",
             runServiceName: "moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest",
-            brokerUri: System.getProperty("gateway_acceptance_broker_uri"),
             query: TOPIC,
             timeout: 5000
         }

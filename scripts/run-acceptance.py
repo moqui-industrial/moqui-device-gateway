@@ -232,12 +232,12 @@ def main():
             "apache/activemq-artemis:latest")
     await_port(broker_port())
     ENV.update(gateway_acceptance_control_dir=str(ROOT),
-               gateway_acceptance_broker_uri="mqtt://127.0.0.1:"+str(broker_port())+"?userName=artemis&password=artemis",
+               device_broker_username="artemis",device_broker_password="artemis",
                device_gateway_device_id="GW_EDGE_01",device_gateway_error_notification_seconds="0")
-    # Native mqtt:// options belong to DeviceConnection, so use the established legacy URI envelope here.
+    # the broker of every broker request, reached through the link proxy that the spec cuts and restores
     global LINK
     LINK=LinkProxy()
-    ENV["gateway_acceptance_broker_uri"]="paho-mqtt5:?brokerUrl=tcp://127.0.0.1:"+str(LINK.port)+"&userName=artemis&password=artemis&maxReconnectDelay=1000"
+    ENV["device_broker_uri"]="paho-mqtt5:?brokerUrl=tcp://127.0.0.1:"+str(LINK.port)+"&maxReconnectDelay=1000"
     controller=HTTPServer(("127.0.0.1",0),Controller)
     ENV["gateway_acceptance_control_url"]="http://127.0.0.1:"+str(controller.server_address[1])+"/"+TOKEN+"/"
     thread=threading.Thread(target=controller.serve_forever,daemon=True); thread.start()

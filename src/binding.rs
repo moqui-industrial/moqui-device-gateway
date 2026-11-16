@@ -181,42 +181,44 @@ fn connection(
     c: Option<&EntityValue>,
     device_id: &str,
 ) -> Result<Connection, Error> {
-    let mut options = if let Some(c) = c {
+    let router = text(r, "routerEnumId");
+    let is_broker = is_enum_in_hierarchy(ec, ef, router.as_deref(), "DrrBroker");
+    // A broker request goes to the broker of the instance, with the broker's user; a direct request to its
+    // DeviceConnection, with the user the device knows.
+    let (endpoint, mut options, mut credentials) = if is_broker {
+        let endpoint = moqui_lib::env::get_prop_or_env("device_broker_uri");
+        if endpoint.trim().is_empty() {
+            return Err(Error::new(
+                "A broker request needs the broker of this instance: set the property device_broker_uri",
+            ));
+        }
+        let property = |name: &str| Some(moqui_lib::env::get_prop_or_env(name)).filter(|v| !v.is_empty());
+        (
+            endpoint,
+            BTreeMap::new(),
+            Credentials {
+                username: property("device_broker_username"),
+                password: property("device_broker_password"),
+            },
+        )
+    } else {
+        let c = c.ok_or_else(|| {
+            Error::new("A direct request needs a DeviceConnection; a broker request a routerEnumId under DrrBroker")
+        })?;
         if text(c, "deviceId").as_deref() != Some(device_id) {
             return Err(Error::new("Connection belongs to another device"));
         }
-        if text(c, "userId").is_some() {
-            return Err(Error::new(
-                "DeviceConnection.userId needs an explicit credential provider; password hashes cannot authenticate a \
-                 device",
-            ));
-        }
-        parse_options(&text(c, "options").unwrap_or_default())?
-    } else {
-        BTreeMap::new()
-    };
-    let router = text(r, "routerEnumId");
-    let is_broker = is_enum_in_hierarchy(ec, ef, router.as_deref(), "DrrBroker") || c.is_none();
-
-    let endpoint = if let Some(broker_uri) = text(r, "brokerUri").filter(|s| !s.trim().is_empty()) {
-        broker_uri
-    } else if !is_broker && c.is_some() {
-        c.and_then(|c| text(c, "transportConfig"))
-            .ok_or_else(|| Error::new("No field connection endpoint"))?
-    } else {
-        let default_broker = moqui_lib::env::get_prop_or_env("device_mqtt_broker_uri");
-        if !default_broker.trim().is_empty() {
-            default_broker
-        } else {
-            let default_general = moqui_lib::env::get_prop_or_env("device_broker_uri");
-            if !default_general.trim().is_empty() {
-                default_general
-            } else if let Some(cfg) = c.and_then(|c| text(c, "transportConfig")) {
-                cfg
-            } else {
-                return Err(Error::new("No field connection endpoint"));
-            }
-        }
+        let endpoint = text(c, "transportConfig")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| Error::new("No field connection endpoint: set DeviceConnection.transportConfig"))?;
+        (
+            endpoint,
+            parse_options(&text(c, "options").unwrap_or_default())?,
+            Credentials {
+                username: text(c, "username").filter(|v| !v.is_empty()),
+                password: text(c, "password").filter(|v| !v.is_empty()),
+            },
+        )
     };
     let driver = c.and_then(|c| text(c, "driverEnumId"));
     let is_mqtt_router = is_enum_in_hierarchy(ec, ef, router.as_deref(), "DrrMQTTBroker");
@@ -320,30 +322,41 @@ fn connection(
             endpoint = url.to_string();
         }
     }
-    let username = options.remove("username").or_else(|| options.remove("userName"));
-    let password = options.remove("password");
+    // Credentials in the options or the endpoint would be stored, or configured, in clear.
+    if ["username", "userName", "password"]
+        .iter()
+        .any(|k| options.contains_key(*k))
+    {
+        return Err(Error::new(if is_broker {
+            "Set the broker user in device_broker_username and device_broker_password, not in device_broker_uri"
+        } else {
+            "Store the credentials of a device in DeviceConnection.username and password, not in its options or endpoint"
+        }));
+    }
     let resolve = |value: Option<String>, env: Option<String>| -> Result<Option<String>, Error> {
         match (value, env) {
             (Some(_), Some(_)) => Err(Error::new(
                 "Specify a credential value or environment variable, not both",
             )),
             (Some(v), None) => Ok(Some(v)),
-            (None, Some(k)) => std::env::var(k)
+            (None, Some(k)) => Some(moqui_lib::env::get_prop_or_env(&k))
+                .filter(|v| !v.is_empty())
                 .map(Some)
-                .map_err(|_| Error::new("Configured credential environment variable is missing")),
+                .ok_or_else(|| Error::new("Configured credential environment variable is missing")),
             _ => Ok(None),
         }
     };
-    let username = resolve(username, options.remove("usernameEnv"))?;
-    let password = resolve(password, options.remove("passwordEnv"))?;
+    credentials.username = resolve(credentials.username.take(), options.remove("usernameEnv"))?;
+    credentials.password = resolve(credentials.password.take(), options.remove("passwordEnv"))?;
     Ok(Connection {
         name: c
+            .filter(|_| !is_broker)
             .and_then(|c| text(c, "connectionName"))
             .unwrap_or_else(|| "broker".into()),
         protocol,
         endpoint,
         options,
-        credentials: Credentials { username, password },
+        credentials,
     })
 }
 
@@ -834,6 +847,35 @@ pub(crate) fn notify_inbound(
     params.insert(
         "errorMessage".into(),
         error_message.map(Value::string).unwrap_or(Value::Null),
+    );
+    call_service(
+        ec,
+        "moqui.device.DeviceAcquisitionServices.notify#InboundState",
+        &params,
+    )
+    .map(|_| ())
+}
+
+/// Tells the user that a full persistence queue discarded polling or OPC UA samples of a request
+/// (DeviceAcquisitionServices.notify#InboundState, eventType queueFull).
+pub(crate) fn notify_discarded(
+    ec: &ExecutionContext,
+    request_name: &str,
+    device_id: &str,
+    samples: u64,
+    capacity: usize,
+) -> Result<(), Error> {
+    let mut params = Parameters::new();
+    params.insert("requestName".into(), Value::string(request_name));
+    params.insert("deviceId".into(), Value::string(device_id));
+    params.insert("eventType".into(), Value::string("queueFull"));
+    params.insert(
+        "discardedCount".into(),
+        Value::I64(i64::try_from(samples).unwrap_or(i64::MAX)),
+    );
+    params.insert(
+        "queueCapacity".into(),
+        Value::I64(i64::try_from(capacity).unwrap_or(i64::MAX)),
     );
     call_service(
         ec,
