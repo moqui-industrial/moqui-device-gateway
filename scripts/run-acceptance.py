@@ -26,9 +26,11 @@ import time
 import secrets
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
+from scratch_runtime import scratch_runtime
 
 COMPONENT = pathlib.Path(__file__).resolve().parents[1]
-FRAMEWORK = COMPONENT.parents[2]
+# the MR-Moqui root: the first parent with the framework crates and moq
+FRAMEWORK = next(p for p in COMPONENT.parents if (p/"crates").is_dir() and (p/"moq").is_file())
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix="moqui-gateway-acceptance-"))
 BROKER = "moqui-gateway-acceptance-" + str(os.getpid())
 ENV = dict(os.environ)
@@ -220,11 +222,7 @@ def run_specs(phase,runtime,mode):
                 except subprocess.TimeoutExpired: child.kill(); child.wait()
 
 def main():
-    runtime=ROOT/"runtime"; (runtime/"component").mkdir(parents=True)
-    (runtime/"base-component").symlink_to(FRAMEWORK/"runtime/base-component",target_is_directory=True)
-    (runtime/"conf").symlink_to(FRAMEWORK/"runtime/conf",target_is_directory=True)
-    for name in ("moqui-math","moqui-device","moqui-device-gateway"):
-        (runtime/"component"/name).symlink_to(FRAMEWORK/"runtime/component"/name,target_is_directory=True)
+    runtime=scratch_runtime(ROOT,FRAMEWORK)
     print("Acceptance artifacts: "+str(ROOT),flush=True)
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1",0))

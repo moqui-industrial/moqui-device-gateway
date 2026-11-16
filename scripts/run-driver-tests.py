@@ -22,9 +22,11 @@ import tempfile
 import threading
 import time
 from modbus_peer import Server
+from scratch_runtime import scratch_runtime
 
 COMPONENT=pathlib.Path(__file__).resolve().parents[1]
-FRAMEWORK=COMPONENT.parents[2]
+# the MR-Moqui root: the first parent with the framework crates and moq
+FRAMEWORK=next(p for p in COMPONENT.parents if (p/"crates").is_dir() and (p/"moq").is_file())
 ROOT=pathlib.Path(tempfile.mkdtemp(prefix="moqui-driver-tests-"))
 SFTP="moqui-driver-sftp-"+str(os.getpid())
 BROKER="moqui-driver-broker-"+str(os.getpid())
@@ -50,11 +52,7 @@ def ready(port):
 def main():
     free(12686); free(2223)
     print("Driver artifacts: "+str(ROOT),flush=True)
-    runtime=ROOT/"runtime"; (runtime/"component").mkdir(parents=True)
-    (runtime/"base-component").symlink_to(FRAMEWORK/"runtime/base-component",target_is_directory=True)
-    (runtime/"conf").symlink_to(FRAMEWORK/"runtime/conf",target_is_directory=True)
-    for name in ("moqui-math","moqui-device","moqui-device-gateway"):
-        (runtime/"component"/name).symlink_to(FRAMEWORK/"runtime/component"/name,target_is_directory=True)
+    runtime=scratch_runtime(ROOT,FRAMEWORK)
     environment=dict(os.environ,MOQUI_RUNTIME=str(runtime),CARGO_TARGET_DIR=str(FRAMEWORK/"target"))
     # The example's dev dependencies contain the local OPC UA server.
     build=subprocess.run(["cargo","build","--manifest-path",str(COMPONENT/"Cargo.toml"),"--example","opcua_test_server","-j","4"],
@@ -85,14 +83,20 @@ def main():
             environment.update(gateway_mqtt_test="1",gateway_opcua_test="1",gateway_sftp_test="1",
                 gateway_sftp_fingerprint=fingerprint,gateway_sftp_output_dir=str(upload),gateway_modbus_test="1",
                 gateway_mqtt_test_broker="tcp://127.0.0.1:"+str(broker_port),
+                # the broker of the requests that name none (HVAC_DEMO_PlcLogSubscribe)
+                device_mqtt_broker_uri="paho-mqtt5:?brokerUrl=tcp://127.0.0.1:"+str(broker_port)+"&userName=artemis&password=artemis&qos=1",
                 gateway_modbus_endpoint="modbus-tcp://127.0.0.1:"+str(peer.server_address[1]),
-                device_gateway_device_id="GW_EDGE_01",device_gateway_error_notification_seconds="0",
-                MQTT_USERNAME="artemis",MQTT_PASSWORD="artemis")
+                device_gateway_device_id="GW_EDGE_01",device_gateway_error_notification_seconds="0")
             binary=os.environ.get("MOQUI_BINARY",str(FRAMEWORK/"target/debug/moqui"))
             with (ROOT/"driver-tests.log").open("w") as log:
                 result=subprocess.run([binary,"test","moqui-device","moqui-device-gateway","--db","fresh"],env=environment,stdout=log,stderr=subprocess.STDOUT)
             print((ROOT/"driver-tests.log").read_text(),flush=True)
-            if result.returncode: raise RuntimeError("Driver round-trip tests failed")
+            # the HVAC demo devices are in the scope of HVAC_DEMO_GATEWAY, not GW_EDGE_01
+            with (ROOT/"hvac-tests.log").open("w") as log:
+                hvac=subprocess.run([binary,"test","moqui-device-gateway","--spec","DeviceGateway","--feature","the HVAC demo",
+                    "--db","fresh"],env=dict(environment,device_gateway_device_id="HVAC_DEMO_GATEWAY"),stdout=log,stderr=subprocess.STDOUT)
+            print((ROOT/"hvac-tests.log").read_text(),flush=True)
+            if result.returncode or hvac.returncode: raise RuntimeError("Driver round-trip tests failed")
             peer.shutdown(); thread.join(timeout=5)
     finally:
         if eip: eip.terminate(); eip.wait(timeout=20)

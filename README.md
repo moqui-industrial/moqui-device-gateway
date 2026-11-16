@@ -241,10 +241,13 @@ cargo test
 ```
 
 The service tests (`test/DeviceGateway.spec.js`) need moqui-math and moqui-device
-installed. `scripts/run-driver-tests.py` starts local peers (Docker images
+installed; they test the drivers, and the services common to every driver (recipe
+export, content transfer, sample store, gateway scope) are tested by moqui-device's
+`test/DeviceRequests.spec.js`. `scripts/run-driver-tests.py` starts local peers (Docker images
 `apache/activemq-artemis` and `atmoz/sftp:alpine`, which it does not pull, the OPC
 UA server of `examples/opcua_test_server.rs`, a Modbus peer) and runs the suites
-of moqui-device and of this component with every feature. With `CPPPO_PYTHON`
+of moqui-device and of this component with every feature as gateway `GW_EDGE_01`,
+then the HVAC demo feature as `HVAC_DEMO_GATEWAY`, whose scope holds the demo plant. With `CPPPO_PYTHON`
 naming a Python that has [cpppo](https://pypi.org/project/cpppo/), it also
 starts cpppo's Logix simulator and runs the EtherNet/IP feature; `cargo test`
 runs the EtherNet/IP round trip when `GATEWAY_EIP_ENDPOINT` names one. EtherCAT
