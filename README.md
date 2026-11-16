@@ -229,7 +229,7 @@ interfaces a PLC runtime would implement.
 
 ## Building and testing
 
-Install this repository at `runtime/component/moqui-device-gateway` in mr-moqui;
+Install this repository at `runtime/components/addon/moqui-device-gateway` in mr-moqui;
 the `moqui` feature uses the framework's sibling `moqui-core` and `moqui-lib`
 crates. Rust 1.99 or later is required.
 
