@@ -353,7 +353,7 @@ feature("a burst of ten MQTT messages is logged ten times", {
 feature("the HVAC demo publishes the live parameters and stores the PLC log across the plant hierarchy", {
     // HVAC_DEMO_PLC is in the scope of HVAC_DEMO_GATEWAY only
     ignore: !System.getProperty("gateway_mqtt_test")
-        || !["", "HVAC_DEMO_GATEWAY"].includesconfValue("moqui-device@gateway-device-id"),
+        || !["", "HVAC_DEMO_GATEWAY"].includes(confValue("moqui-device@gateway-device-id")),
     when() {
         call("update#moqui.device.DeviceRequest", {requestName: "HVAC_DEMO_LiveParametersWrite", onlyChangedParameters: "N"});
         const write = run("HVAC_DEMO_LiveParametersWrite");
