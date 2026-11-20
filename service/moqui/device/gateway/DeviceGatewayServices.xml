@@ -26,8 +26,8 @@ along with this software (see the LICENSE.md file). If not, see
             DcdMqtt, DcdLogixCIPEIP or DcdEthernetIP, DcdEtherCAT), else the scheme of DeviceConnection.transportConfig
             (modbus-tcp://, opc.tcp://, mqtt://, mqtts://, logix://, eip://, ethercat://), with the credentials of the
             connection (username and password, or the options usernameEnv and passwordEnv). A broker request
-            (routerEnumId DrrBroker or a child) has no connection: it goes to the broker of device_broker_uri, with
-            device_broker_username and device_broker_password. Set it as DeviceRequest.runServiceName, as
+            (routerEnumId DrrBroker or a child) has no connection: it goes to the broker of moqui-device@broker-uri, with
+            @broker-username and @broker-password. Set it as DeviceRequest.runServiceName, as
             moqui.plc4j.Plc4jServices.run#Plc4jRequest was; moqui.device.DeviceServices.run#DeviceRequest calls it.
 
             DrtRead reads the items once and stores the values (DeviceAcquisitionServices.store#Samples); with a
@@ -41,7 +41,7 @@ along with this software (see the LICENSE.md file). If not, see
             parentRequestName.
 
             The item address is DeviceRequestItem.query, else DeviceRequest.query: a Modbus register, an OPC UA node id,
-            an MQTT topic, a Logix tag, an EtherCAT process data offset. With the property device_gateway_device_id set,
+            an MQTT topic, a Logix tag, an EtherCAT process data offset. With moqui-device@gateway-device-id set,
             a device outside the scope of that gateway is refused (DeviceAcquisitionServices.get#GatewayScope).
         </description>
         <implements service="moqui.device.DeviceServices.run#DeviceRequestInternal"/>

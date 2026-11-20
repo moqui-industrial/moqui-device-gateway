@@ -186,19 +186,19 @@ fn connection(
     // A broker request goes to the broker of the instance, with the broker's user; a direct request to its
     // DeviceConnection, with the user the device knows.
     let (endpoint, mut options, mut credentials) = if is_broker {
-        let endpoint = moqui_lib::env::get_prop_or_env("device_broker_uri");
+        let endpoint = moqui_core::context::conf_env::setting("moqui-device@broker-uri");
         if endpoint.trim().is_empty() {
             return Err(Error::new(
-                "A broker request needs the broker of this instance: set the property device_broker_uri",
+                "A broker request needs the broker of this instance: set moqui-device@broker-uri",
             ));
         }
-        let property = |name: &str| Some(moqui_lib::env::get_prop_or_env(name)).filter(|v| !v.is_empty());
+        let property = |name: &str| Some(moqui_core::context::conf_env::setting(name)).filter(|v| !v.is_empty());
         (
             endpoint,
             BTreeMap::new(),
             Credentials {
-                username: property("device_broker_username"),
-                password: property("device_broker_password"),
+                username: property("moqui-device@broker-username"),
+                password: property("moqui-device@broker-password"),
             },
         )
     } else {
@@ -328,7 +328,7 @@ fn connection(
         .any(|k| options.contains_key(*k))
     {
         return Err(Error::new(if is_broker {
-            "Set the broker user in device_broker_username and device_broker_password, not in device_broker_uri"
+            "Set the broker user in moqui-device@broker-username and @broker-password, not in @broker-uri"
         } else {
             "Store the credentials of a device in DeviceConnection.username and password, not in its options or endpoint"
         }));
@@ -780,9 +780,9 @@ fn call_service(ec: &ExecutionContext, service: &str, params: &Parameters) -> Re
     Ok(out)
 }
 
-/// The gateway this process is, from the property `device_gateway_device_id`; empty when not configured.
+/// The gateway this process is, from `moqui-device@gateway-device-id`; empty when not configured.
 pub fn gateway_device_id() -> String {
-    moqui_lib::env::get_prop_or_env("device_gateway_device_id")
+    moqui_core::context::conf_env::setting("moqui-device@gateway-device-id")
 }
 
 /// With a configured gateway, a request runs only for a device in its scope: the DeviceGroups the gateway is a

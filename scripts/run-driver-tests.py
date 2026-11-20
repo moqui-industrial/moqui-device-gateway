@@ -83,10 +83,10 @@ def main():
             environment.update(gateway_mqtt_test="1",gateway_opcua_test="1",gateway_sftp_test="1",
                 gateway_sftp_fingerprint=fingerprint,gateway_sftp_output_dir=str(upload),gateway_modbus_test="1",
                 # the broker of every broker request
-                device_broker_uri="paho-mqtt5:?brokerUrl=tcp://127.0.0.1:"+str(broker_port)+"&qos=1",
-                device_broker_username="artemis",device_broker_password="artemis",
+                moqui_conf__moqui_device__broker_uri="paho-mqtt5:?brokerUrl=tcp://127.0.0.1:"+str(broker_port)+"&qos=1",
+                moqui_conf__moqui_device__broker_username="artemis",moqui_conf__moqui_device__broker_password="artemis",
                 gateway_modbus_endpoint="modbus-tcp://127.0.0.1:"+str(peer.server_address[1]),
-                device_gateway_device_id="GW_EDGE_01",device_gateway_error_notification_seconds="0")
+                moqui_conf__moqui_device__gateway_device_id="GW_EDGE_01",moqui_conf__moqui_device_gateway__error_notification_seconds="0")
             binary=os.environ.get("MOQUI_BINARY",str(FRAMEWORK/"target/debug/moqui"))
             with (ROOT/"driver-tests.log").open("w") as log:
                 result=subprocess.run([binary,"test","moqui-device","moqui-device-gateway","--db","fresh"],env=environment,stdout=log,stderr=subprocess.STDOUT)
@@ -94,7 +94,7 @@ def main():
             # the HVAC demo devices are in the scope of HVAC_DEMO_GATEWAY, not GW_EDGE_01
             with (ROOT/"hvac-tests.log").open("w") as log:
                 hvac=subprocess.run([binary,"test","moqui-device-gateway","--spec","DeviceGateway","--feature","the HVAC demo",
-                    "--db","fresh"],env=dict(environment,device_gateway_device_id="HVAC_DEMO_GATEWAY"),stdout=log,stderr=subprocess.STDOUT)
+                    "--db","fresh"],env=dict(environment,moqui_conf__moqui_device__gateway_device_id="HVAC_DEMO_GATEWAY"),stdout=log,stderr=subprocess.STDOUT)
             print((ROOT/"hvac-tests.log").read_text(),flush=True)
             if result.returncode or hvac.returncode: raise RuntimeError("Driver round-trip tests failed")
             peer.shutdown(); thread.join(timeout=5)

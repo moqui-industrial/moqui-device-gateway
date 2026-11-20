@@ -64,7 +64,7 @@ impl Gateway {
     }
 }
 
-/// Batches waiting for the persistence worker, unless `device_gateway_queue_capacity` sets another number.
+/// Batches waiting for the persistence worker, unless `moqui-device-gateway@queue-capacity` sets another number.
 const QUEUE_CAPACITY: usize = 1024;
 /// What the worker stores in one go: the batches already waiting, up to these limits.
 const MAX_JOBS: usize = 512;
@@ -103,7 +103,7 @@ impl QueueSink {
             tracing::error!(
                 request = %batch.request_name,
                 capacity = self.capacity,
-                "Device gateway persistence queue is full: samples are discarded; see device_gateway_queue_capacity"
+                "Device gateway persistence queue is full: samples are discarded; see moqui-device-gateway@queue-capacity"
             );
             (device, 0)
         });
@@ -230,29 +230,29 @@ impl ToolFactory for DeviceGatewayToolFactory {
     }
 }
 
-/// `device_gateway_queue_capacity`, in batches: a number above zero, else the default.
+/// `moqui-device-gateway@queue-capacity`, in batches: a number above zero, else the default.
 fn queue_capacity() -> usize {
-    let value = moqui_lib::env::get_prop_or_env("device_gateway_queue_capacity");
+    let value = moqui_core::context::conf_env::setting("moqui-device-gateway@queue-capacity");
     if value.trim().is_empty() {
         return QUEUE_CAPACITY;
     }
     match value.trim().parse::<usize>() {
         Ok(capacity) if capacity > 0 => capacity,
         _ => {
-            tracing::error!(value = %value, default = QUEUE_CAPACITY, "Invalid device_gateway_queue_capacity; using the default");
+            tracing::error!(value = %value, default = QUEUE_CAPACITY, "Invalid moqui-device-gateway@queue-capacity; using the default");
             QUEUE_CAPACITY
         }
     }
 }
 
-/// Persistence failure notices: `device_gateway_error_notification=false` turns them off, and
-/// `device_gateway_error_notification_seconds` (default 60) is how long the failures of a request last before the
+/// Persistence failure notices: `moqui-device-gateway@error-notification` false turns them off, and
+/// `@error-notification-seconds` (default 60) is how long the failures of a request last before the
 /// user is told, and the shortest time between two notices of discarded samples.
 fn notification_seconds() -> Option<Duration> {
-    if moqui_lib::env::get_prop_or_env("device_gateway_error_notification") == "false" {
+    if moqui_core::context::conf_env::setting("moqui-device-gateway@error-notification") == "false" {
         return None;
     }
-    let seconds = moqui_lib::env::get_prop_or_env("device_gateway_error_notification_seconds")
+    let seconds = moqui_core::context::conf_env::setting("moqui-device-gateway@error-notification-seconds")
         .parse::<u64>()
         .unwrap_or(60);
     Some(Duration::from_secs(seconds))

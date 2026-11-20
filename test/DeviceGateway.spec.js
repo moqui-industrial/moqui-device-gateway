@@ -5,11 +5,11 @@
 // The requests are those of moqui-device's DeviceTestData.xml and HVAC demo data. The services common to every
 // driver (recipe export, content transfer, sample store, gateway scope) are tested by moqui-device's
 // DeviceRequests.spec.js. Optional features:
-//   gateway_mqtt_test=1: the MQTT 5 broker of device_broker_uri, device_broker_username and device_broker_password,
+//   gateway_mqtt_test=1: the MQTT 5 broker of moqui-device@broker-uri, @broker-username and @broker-password,
 //     which every broker request uses;
-//   device_gateway_device_id=HVAC_DEMO_GATEWAY (or none): the HVAC demo, whose devices are outside GW_EDGE_01;
-//   device_gateway_error_notification_seconds=0 with gateway_mqtt_test: the persistence failure notification;
-//   device_gateway_device_id=GW_EDGE_01: requests outside the gateway scope are refused;
+//   moqui-device@gateway-device-id HVAC_DEMO_GATEWAY (or none): the HVAC demo, whose devices are outside GW_EDGE_01;
+//   moqui-device-gateway@error-notification-seconds 0 with gateway_mqtt_test: the persistence failure notification;
+//   moqui-device@gateway-device-id GW_EDGE_01: requests outside the gateway scope are refused;
 //   gateway_opcua_test=1: the OPC UA server of `cargo run --example opcua_test_server` on 127.0.0.1:12686;
 //   gateway_modbus_test=1 and gateway_modbus_endpoint=modbus-tcp://host:port: a Modbus TCP server
 //     (scripts/modbus_peer.py);
@@ -19,6 +19,8 @@ spec({
     cleanup() { ec.artifactExecution.enableAuthz(); },
 });
 
+// A conf attribute of this instance, empty when not set
+const confValue = (selector) => ec.factory.getConfValue(selector) || "";
 const gatewayService = "moqui.device.gateway.DeviceGatewayServices.run#DeviceGatewayRequest";
 const plcLogService = "moqui.device.gateway.DeviceGatewayServices.run#PlcLogRequest";
 const storeRequest = (fields) => call("store#moqui.device.DeviceRequest",
@@ -166,7 +168,7 @@ feature("a direct request needs a DeviceConnection, whose credentials are not in
 });
 
 feature("with a configured gateway a request outside its scope is refused", {
-    ignore: System.getProperty("device_gateway_device_id") !== "GW_EDGE_01",
+    ignore: confValue("moqui-device@gateway-device-id") !== "GW_EDGE_01",
     allowMessageErrors: true,
     when() {
         const failure = failureOf(() => run("HVAC_DEMO_PlcLogSubscribe"));
@@ -290,7 +292,7 @@ feature("MQTT 5 delivers values with the QoS 0, 1 and 2 of each request", {
 });
 
 feature("an unreadable MQTT item does not drop its valid sibling or stop subsequent collecting", {
-    ignore: !System.getProperty("gateway_mqtt_test") || System.getProperty("device_gateway_error_notification_seconds") !== "0",
+    ignore: !System.getProperty("gateway_mqtt_test") || confValue("moqui-device-gateway@error-notification-seconds") !== "0",
     when() {
         const topic = "mqtt-read-device-request/native/partial-collection";
         const common = {deviceId: "VIRTUAL_PLC_01", routerEnumId: "DrrMQTTBroker", query: topic};
@@ -351,7 +353,7 @@ feature("a burst of ten MQTT messages is logged ten times", {
 feature("the HVAC demo publishes the live parameters and stores the PLC log across the plant hierarchy", {
     // HVAC_DEMO_PLC is in the scope of HVAC_DEMO_GATEWAY only
     ignore: !System.getProperty("gateway_mqtt_test")
-        || !["", "HVAC_DEMO_GATEWAY"].includes(System.getProperty("device_gateway_device_id") || ""),
+        || !["", "HVAC_DEMO_GATEWAY"].includesconfValue("moqui-device@gateway-device-id"),
     when() {
         call("update#moqui.device.DeviceRequest", {requestName: "HVAC_DEMO_LiveParametersWrite", onlyChangedParameters: "N"});
         const write = run("HVAC_DEMO_LiveParametersWrite");
@@ -449,7 +451,7 @@ feature("PLC log events go to ParameterLog or DeviceLog, and a malformed batch d
 });
 
 feature("persistence failures and the recovery are notified to the user", {
-    ignore: !System.getProperty("gateway_mqtt_test") || System.getProperty("device_gateway_error_notification_seconds") !== "0",
+    ignore: !System.getProperty("gateway_mqtt_test") || confValue("moqui-device-gateway@error-notification-seconds") !== "0",
     when() {
         storeRequest({requestName: "GatewayTestFailing", deviceId: "VIRTUAL_PLC_01", requestTypeEnumId: "DrtSubscribe",
             purposeEnumId: "DrpLogging", routerEnumId: "DrrMQTTBroker", runServiceName: plcLogService,
@@ -479,7 +481,7 @@ feature("persistence failures and the recovery are notified to the user", {
 
 feature("startup restores eligible subscriptions without resurrecting explicitly stopped ones", {
     // the restoration state is per process: no other feature calls start#Subscriptions
-    ignore: !System.getProperty("gateway_mqtt_test") || System.getProperty("device_gateway_device_id") !== "GW_EDGE_01",
+    ignore: !System.getProperty("gateway_mqtt_test") || confValue("moqui-device@gateway-device-id") !== "GW_EDGE_01",
     when() {
         // earlier features explicitly unsubscribed the seeded MQTT request: the restoration must respect that stop
         const topic = "mqtt-read-device-request/native/startup-fresh";

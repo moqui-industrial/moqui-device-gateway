@@ -126,8 +126,8 @@ or `password` in the options or the endpoint is refused. A broker request
   `holding-register:10:REAL`. No 40001 adjustment is inferred.
 * MQTT: a broker request (`routerEnumId` `DrrBroker` or a child, such as
   `DrrMQTTBroker`) uses the one broker of the instance: the properties
-  `device_broker_uri` (e.g. `paho-mqtt5:?brokerUrl=tcp://host:1883&qos=1` or
-  `mqtt://host:1883`), `device_broker_username` and `device_broker_password`
+  `moqui-device@broker-uri` (e.g. `paho-mqtt5:?brokerUrl=tcp://host:1883&qos=1` or
+  `mqtt://host:1883`), `@broker-username` and `@broker-password`
   (put the password in `runtime/.env`). A user in the URI is refused. The
   `qos` and `retained` of the `DeviceRequest` override those of the URI.
   Message brokers do not use `DeviceConnection` (reserved for point-to-point
@@ -200,10 +200,10 @@ the broker close the connection and deliver the unacknowledged messages again.
 Prefer MQTT 5 for durable subscriptions.
 
 Polling and OPC UA samples have no broker behind them: when the queue is full
-(`device_gateway_queue_capacity` batches, default 1024) they are discarded. The
+(`moqui-device-gateway@queue-capacity` batches, default 1024) they are discarded. The
 first discard of a request is logged at once, and the worker notifies how many
 values were discarded (`DeviceInboundFailed`, event `queueFull`), at most once
-every `device_gateway_error_notification_seconds`. Size the queue for the polling
+every `moqui-device-gateway@error-notification-seconds`. Size the queue for the polling
 rate times the longest database stall to bridge. The sample worker keeps and
 retries the batches it has taken while the database does not answer.
 
